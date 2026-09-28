@@ -526,3 +526,13 @@ table.fm .mono{font-family:var(--mono);font-size:11px;color:var(--primary-deep)}
   box-shadow:0 6px 16px -10px rgba(28,48,42,.18);
 }
 @media (max-width:640px){ .sticky-stats{top:56px} }
+
+/* 核对过滤器与跳转 */
+.cs-item.filter-on{border-color:var(--primary);color:var(--primary-deep);background:var(--primary-soft);font-weight:600}
+.cs-item.clickable{cursor:pointer}
+.cs-item.clickable:hover{border-color:var(--primary)}
+.f-row.flash{animation:rowFlash 1.4s}
+@keyframes rowFlash{0%,60%{background:var(--yellow-bg);box-shadow:inset 3px 0 0 var(--yellow)}100%{background:transparent}}
+.ai-dot{width:9px;height:9px;border-radius:50%;background:#7d8f8a;display:inline-block;margin-right:12px;flex:none}
+.ai-dot.on{background:#3bd9a5;box-shadow:0 0 8px #3bd9a5}
+@media (max-width:640px){ .ai-dot{margin-right:6px} }

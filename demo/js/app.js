@@ -96,6 +96,14 @@ window.addEventListener("hashchange", route);
 function viewWorkbench(){
   const totalDocs = S.patients.reduce((n, p) => n + p.admissions.reduce((m, a) => m + a.doc_count, 0), 0);
   const totalAdm = S.patients.reduce((n, p) => n + p.admissions.length, 0);
+  let flowSaved = null;
+  try { flowSaved = JSON.parse(localStorage.getItem("mra_flow_DA0001_1")); } catch (e) {}
+  const editsDone = flowSaved ? Object.keys(flowSaved.edits || {}).length : 0;
+  const flowDone = flowSaved && flowSaved.step === 4;
+  const task1Title = flowDone ? "患者A · 入院记录（急性阑尾炎）— 已归档（演示）"
+    : editsDone > 0 ? `患者A · 入院记录（急性阑尾炎）— 核对中，已修改 ${editsDone} 处`
+    : "患者A · 入院记录（急性阑尾炎）— AI 草稿已生成，待四色确认";
+  const task1Btn = flowDone ? "查看归档结果 →" : "继续核对 →";
   $app.innerHTML = `
     <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者已脱敏（患者A / 患者B），数据源自院方提供的真实住院病历（金标准）；"录音转写"为按真实入院记录重构的模拟对话，"AI 生成"内容取自金标准文书以演示确认流程。正式环境中草稿由多智能体实时生成。</div>
     <div class="page-head">
@@ -107,10 +115,10 @@ function viewWorkbench(){
       <div class="card task-row t-warn">
         <div class="t-icon">🖊</div>
         <div class="t-main">
-          <div class="t-title">患者A · 入院记录（急性阑尾炎）— AI 草稿已生成，待四色确认</div>
-          <div class="t-sub">法定时限：入院 24h 内完成 · 剩余 13h · 27 轮问诊对话已转写</div>
+          <div class="t-title">${task1Title}</div>
+          <div class="t-sub">法定时限：入院 24h 内完成 · 剩余 13h · 27 轮问诊对话已转写${editsDone > 0 && !flowDone ? " · 修改已自动留痕" : ""}</div>
         </div>
-        <button class="btn primary" onclick="location.hash='#/adm/DA0001/1'">核对草稿 →</button>
+        <button class="btn primary" onclick="location.hash='#/adm/DA0001/1'">${task1Btn}</button>
       </div>
       <div class="card task-row t-dim">
         <div class="t-icon">📝</div>
@@ -270,7 +278,7 @@ function flowState(key){
   if (!S.flow[key]){
     try { S.flow[key] = JSON.parse(localStorage.getItem("mra_flow_" + key)) || null; } catch (e) {}
     if (!S.flow[key] || typeof S.flow[key] !== "object")
-      S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false };
+      S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false, filter: "all" };
   }
   return S.flow[key];
 }
@@ -305,6 +313,15 @@ function viewAdmission(code, idx){
     ${stepBar}
     <div id="step-body"></div>`;
 
+  if (editable){
+    const chips = adm.docs.map((d, di) =>
+      `<span class="doc-chip" style="cursor:pointer" onclick="openDoc('${code}',${idx - 1},${di})">${esc(d.type)}·${esc((d.title || "").slice(0, 14))}</span>`).join("");
+    document.getElementById("step-body").insertAdjacentHTML("beforebegin",
+      `<div class="card" style="padding:10px 16px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--ink-3);white-space:nowrap">本次住院文书（${adm.doc_count} 份，点击调阅）</span>
+        <div class="doc-chips" style="margin:0">${chips}</div>
+      </div>`);
+  }
   const body = document.getElementById("step-body");
   if (!editable) return renderAdmReadonly(body, p, adm, idx);
   if (st.step === 1) renderStepRecord(body, key, adm);
@@ -498,25 +515,35 @@ function renderStepConfirm(body, key, adm){
   });
   const cCount = { blue: 0, green: 0, gray: 0, yellow: 0 };
   labeled.forEach(f => cCount[colorOf(f)]++);
+  const filters = [
+    ["all", "全部字段"], ["review", "待核对（黄+绿）"], ["yellow", "仅缺失（黄）"],
+  ];
+  const keep = c => st.filter === "review" ? (c === "green" || c === "yellow")
+    : st.filter === "yellow" ? c === "yellow" : true;
 
   body.innerHTML = `
     <div class="legend">
       ${Object.entries(COLOR_META).map(([k, m]) => `<span><span class="cdot ${m.dot}"></span>${m.name} —— ${m.tip}</span>`).join("")}
     </div>
     <div class="confirm-stats sticky-stats">
-      ${Object.entries(COLOR_META).map(([k, m]) => `<div class="cs-item"><span class="dot ${m.dot}"></span>${m.name}<b>${cCount[k]}</b></div>`).join("")}
-      <div class="cs-item" style="margin-left:auto;color:var(--yellow);border-color:#ecd9ae;background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组字段取值冲突待裁定 · ${cCount.yellow} 项缺失待补</div>
+      ${filters.map(([k, name]) => `<div class="cs-item ${st.filter === k ? "filter-on" : ""}" style="cursor:pointer" onclick="setConfirmFilter('${k}')">${name}</div>`).join("")}
+      ${Object.entries(COLOR_META).map(([k, m]) => `<div class="cs-item clickable" onclick="jumpToColor('${k}')"><span class="dot ${m.dot}"></span>${m.name}<b>${cCount[k]}</b></div>`).join("")}
+      <div class="cs-item" style="color:var(--yellow);border-color:#ecd9ae;background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组取值冲突 · 点颜色定位字段</div>
     </div>
     <div id="sec-list">
-    ${sections.map(sec => `
+    ${sections.map(sec => {
+      const vis = sec.fields.filter(f => keep(colorOf(f)));
+      if (!vis.length) return "";
+      return `
       <div class="card sec-block open" data-sec="${esc(sec.name)}">
         <div class="sec-head" onclick="this.parentElement.classList.toggle('open')">
-          ${esc(sec.name)}<span class="cnt">${sec.fields.length} 项</span><span class="arrow">▶</span>
+          ${esc(sec.name)}<span class="cnt">${vis.length} 项</span><span class="arrow">▶</span>
         </div>
         <div class="sec-body">
-          ${sec.fields.map(f => fieldRow(f, st, conflictLabels)).join("")}
+          ${vis.map(f => fieldRow(f, st, conflictLabels)).join("")}
         </div>
-      </div>`).join("")}
+      </div>`;
+    }).join("") || `<div class="card" style="padding:30px;text-align:center;color:var(--green);font-size:14px">✓ 该筛选下没有需要处理的项目</div>`}
     </div>
     <div class="confirm-footer">
       <span style="font-size:12px;color:var(--ink-3)">
@@ -530,13 +557,25 @@ function renderStepConfirm(body, key, adm){
     </div>
     <div id="editlog-panel"></div>`;
 
+  window._confirmCtx = { body, key, adm };
   document.getElementById("confirm-btn").onclick = () => {
-    if (window.confirm("确认将本份《入院记录》草稿归档至院内系统？\n（演示环境为模拟归档）确认后责任签章记录为：王医生")){
+    const miss = cCount.yellow;
+    if (window.confirm("确认将本份《入院记录》草稿归档至院内系统？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n（演示环境为模拟归档）确认后责任签章记录为：王医生")){
       flowState(key).step = 4; persistFlow(key); viewAdmission("DA0001", 1);
     }
   };
   window._draftDoc = doc;
   window._draftEdits = st.edits;
+}
+function setConfirmFilter(k){
+  const st = flowState("DA0001_1"); st.filter = k; persistFlow("DA0001_1");
+  const ctx = window._confirmCtx; if (ctx) renderStepConfirm(ctx.body, ctx.key, ctx.adm);
+}
+function jumpToColor(color){
+  const el = document.querySelector(`.f-row[data-color="${color}"]`);
+  if (!el){ alert("该颜色下没有字段（或在当前筛选中被隐藏）"); return; }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 function fieldRow(f, st, conflictLabels){
   const c = colorOf(f);
@@ -546,7 +585,7 @@ function fieldRow(f, st, conflictLabels){
   const empty = !String(val).trim();
   // 溯源：从对话中找到出现该字段标签的轮次
   const srcTurns = S.dialogue.filter(t => t.mapsTo.includes(f.label));
-  return `<div class="f-row c-${c}" id="frow-${fid}">
+  return `<div class="f-row c-${c}" id="frow-${fid}" data-color="${c}">
     <div class="lb"><span class="cdot ${c}"></span>${esc(f.label)}${f.dropdown ? ' <span class="tag" style="background:var(--paper-2);color:var(--ink-3)">受控</span>' : ""}</div>
     <div>
       ${empty ? `<div class="vv" style="color:var(--yellow)">（缺失 · 请补充或核实后填写）</div>`
@@ -794,6 +833,16 @@ function viewAbout(){
 (async function init(){
   await loadData();
   route();
+  // 顶栏 AI 服务状态灯（本地静态环境优雅降级为灰色）
+  fetch("api/health").then(r => r.ok ? r.json() : null).then(d => {
+    const el = document.getElementById("ai-status");
+    if (el && d && d.ok){
+      el.classList.add("on");
+      el.title = "AI 服务在线 · " + (d.engine || "");
+    } else if (el){
+      el.title = "AI 服务离线（本地静态环境属正常）";
+    }
+  }).catch(() => { const el = document.getElementById("ai-status"); if (el) el.title = "AI 服务离线"; });
 })();
 
 /* ---------------- AI 病例总结（服务端 LLM 实时生成） ---------------- */
