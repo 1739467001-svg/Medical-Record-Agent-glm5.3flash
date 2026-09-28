@@ -97,10 +97,10 @@ body{
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 .tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2.5px 9px;border-radius:20px;letter-spacing:.04em;white-space:nowrap}
 .notice{
-  display:flex;gap:10px;align-items:flex-start;font-size:12.5px;line-height:1.7;color:var(--ink-2);
+  display:block;font-size:12.5px;line-height:1.7;color:var(--ink-2);
   background:var(--yellow-bg);border:1px solid #ecd9ae;border-radius:12px;padding:11px 15px;margin-bottom:20px;
 }
-.notice b{color:var(--yellow)}
+.notice b{color:var(--yellow);white-space:nowrap}
 
 /* ---------- 工作台 ---------- */
 .task-list{display:flex;flex-direction:column;gap:10px;margin-bottom:24px}
@@ -359,12 +359,162 @@ table.fm .mono{font-family:var(--mono);font-size:11px;color:var(--primary-deep)}
 .about-prose ul{padding-left:22px}
 .about-prose .kcard{padding:18px 22px;margin-top:14px}
 
-/* 响应式 */
+/* ============================================================
+   响应式适配：手机 / 平板 / 桌面 / 大屏(电视)
+   ============================================================ */
+
+/* ---------- 平板及以下（≤1020px） ---------- */
 @media (max-width:1020px){
   .pt-grid,.rec-grid,.arch-grid{grid-template-columns:1fr}
   .ag-grid{grid-template-columns:1fr 1fr}
   .stat-row{grid-template-columns:1fr 1fr}
   .info-band{grid-template-columns:1fr 1fr 1fr}
   .his-band{grid-template-columns:1fr}
-  .f-row{grid-template-columns:120px 1fr auto}
+  .f-row{grid-template-columns:130px 1fr auto}
+  .rec-panel{position:static}
+  .task-row{flex-wrap:wrap}
+  .task-row .t-main{min-width:0}
+  .task-row .btn{margin-left:auto}
+  .ws-steps{overflow-x:auto;scrollbar-width:none}
+  .ws-steps::-webkit-scrollbar{display:none}
+  .ws-step{white-space:nowrap;padding:11px 12px;font-size:12px}
+}
+
+/* ---------- 手机（≤640px） ---------- */
+@media (max-width:640px){
+  body{font-size:13.5px}
+  #app{padding:16px 12px 48px}
+
+  /* 顶栏压缩 */
+  .topbar{padding:0 12px;gap:10px;height:56px}
+  .brand{min-width:0;gap:8px}
+  .brand-mark{width:30px;height:30px;font-size:17px;border-radius:8px}
+  .brand-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw}
+  .brand-sub{display:none}
+  .topnav{gap:2px}
+  .topnav a{padding:6px 10px;font-size:12.5px}
+  .user-chip div{display:none}
+  .user-chip .avatar{width:30px;height:30px;font-size:12.5px}
+  .notice{display:block}
+  .notice b{white-space:nowrap}
+
+  /* 通用 */
+  .page-head{flex-direction:column;align-items:flex-start;gap:10px;margin-bottom:14px}
+  .page-title{font-size:20px}
+  .page-title small{display:block;margin:4px 0 0}
+  .btn{padding:9px 14px;font-size:13px}
+  .btn.big{font-size:14px;padding:12px 18px}
+  .notice{font-size:12px;padding:10px 12px;line-height:1.6}
+  .foot{flex-direction:column;gap:4px;padding:12px 14px;font-size:10.5px;line-height:1.6}
+
+  /* 工作台 */
+  .stat-row{gap:10px}
+  .stat{padding:13px 14px}
+  .stat .num{font-size:26px}
+  .task-row{padding:13px 14px;gap:11px}
+  .task-row .t-icon{width:36px;height:36px;font-size:16px}
+  .task-row .btn{width:100%;justify-content:center;margin:4px 0 0}
+  .pt-card{padding:16px}
+  .pt-avatar{width:44px;height:44px;font-size:20px}
+  .pt-name{font-size:17px}
+  .adm-item{flex-wrap:wrap;gap:8px}
+  .adm-item .meta{width:100%;order:4;margin-left:34px}
+
+  /* 患者全景 */
+  .pv-head{padding:16px;gap:12px;flex-wrap:wrap}
+  .pv-avatar{width:52px;height:52px;font-size:25px}
+  .pv-title{font-size:20px}
+  .info-band{grid-template-columns:1fr 1fr}
+  .info-cell{padding:10px 12px}
+  .info-cell:nth-child(2n){border-right:none}
+  .info-cell:nth-child(1),.info-cell:nth-child(2){border-bottom:1px solid var(--line)}
+  .tl-card{padding:13px 14px}
+  .tl-head{gap:6px}
+  .tl-disease{font-size:15.5px}
+  .tl-head .btn{width:100%;justify-content:center;margin-top:6px}
+
+  /* 住院工作区 */
+  .ws-head{padding:14px 16px;gap:10px}
+  .ws-head .page-title{font-size:17px}
+  .ws-steps{gap:0}
+  .ws-step{padding:10px 8px;font-size:10.5px;gap:6px}
+  .ws-step .n{width:22px;height:22px;font-size:10.5px}
+
+  /* 录音 */
+  .rec-panel{padding:20px 16px}
+  .rec-orb{width:104px;height:104px}
+  .rec-orb svg{width:36px;height:36px}
+  .rec-time{font-size:22px}
+  .transcript{padding:14px 12px;min-height:320px}
+  .ts-line{gap:8px}
+  .ts-line .who{width:44px;font-size:10px}
+  .ts-bubble{font-size:13.5px;line-height:1.75}
+
+  /* 生成流水线 */
+  .ag-grid{grid-template-columns:1fr;gap:10px}
+
+  /* 四色确认 */
+  .legend{padding:9px 12px;gap:8px;font-size:11px;line-height:1.6}
+  .confirm-stats{gap:6px}
+  .cs-item{padding:6px 9px;font-size:11.5px}
+  .cs-item:last-child{width:100%}
+  .sec-head{padding:10px 12px;font-size:14.5px}
+  .sec-body{padding:2px 10px 12px}
+  .f-row{grid-template-columns:1fr;gap:6px;padding:11px 10px}
+  .f-row .lb{font-size:12px}
+  .f-row .vv{font-size:13px;line-height:1.8}
+  .f-row .ops{opacity:1;padding-top:2px}
+  .mini-btn{padding:7px 12px;font-size:12px}
+  .src-pop{padding:9px 12px;font-size:12px}
+  .confirm-footer{flex-direction:column;align-items:stretch;gap:10px}
+  .confirm-footer > div{flex-direction:column}
+  .confirm-footer .btn{width:100%;justify-content:center}
+
+  /* 归档 */
+  .arch-grid{gap:12px}
+  .xml-view{font-size:10px;line-height:1.7;padding:13px 12px;max-height:360px}
+  .arch-grid .card div[style*="display:flex"]{flex-wrap:wrap}
+
+  /* 弹窗 */
+  .modal-mask{padding:10px}
+  .modal{max-height:92vh;border-radius:13px}
+  .modal-head{padding:13px 14px;flex-wrap:wrap;gap:8px}
+  .modal-head .t{font-size:14.5px}
+  .modal-body{padding:12px}
+
+  /* 说明/字段地图 */
+  .about-prose h2{font-size:17px}
+  .about-prose p,.about-prose li{font-size:13px;line-height:1.9}
+  .fm-wrap{max-height:none;overflow:visible}
+  table.fm{min-width:640px}
+  .fm-toolbar input{min-width:0;width:100%}
+}
+
+/* ---------- 大屏 / 电视（≥1600px） ---------- */
+@media (min-width:1600px){
+  #app{max-width:1480px;padding:34px 40px 72px}
+  .page-title{font-size:30px}
+  .page-title small{font-size:14px}
+  .stat .num{font-size:40px}
+  .stat .lab{font-size:13.5px}
+  .card{border-radius:16px}
+  .task-row{padding:18px 24px}
+  .t-title{font-size:15.5px}
+  .t-sub{font-size:13px}
+  .pt-name{font-size:23px}
+  .tl-disease{font-size:19px}
+  .f-row .vv{font-size:14.5px}
+  .f-row .lb{font-size:13.5px}
+  .ts-bubble{font-size:15px}
+  .ag-name{font-size:17px}
+  .ag-out{font-size:13px}
+  .ws-step{font-size:14px;padding:15px 22px}
+  .btn{font-size:14.5px;padding:10px 18px}
+  .btn.big{font-size:16px;padding:13px 26px}
+}
+@media (min-width:1920px){
+  #app{max-width:1640px}
+  .page-title{font-size:33px}
+  .f-row .vv{font-size:15px}
+  .ts-bubble{font-size:15.5px}
 }
