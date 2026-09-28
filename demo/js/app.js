@@ -265,7 +265,7 @@ function closeModal(){ document.getElementById("modal-root").innerHTML = ""; }
 /* 住院工作区（核心流程）                                            */
 /* ================================================================ */
 function flowState(key){
-  if (!S.flow[key]) S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, archived: false };
+  if (!S.flow[key]) S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false };
   return S.flow[key];
 }
 function viewAdmission(code, idx){
@@ -510,12 +510,16 @@ function renderStepConfirm(body, key, adm){
       </div>`).join("")}
     </div>
     <div class="confirm-footer">
-      <span style="font-size:12px;color:var(--ink-3)">您的每次修改将留痕并回流用于模型优化（反馈闭环）</span>
+      <span style="font-size:12px;color:var(--ink-3)">
+        修改留痕：<b id="editlog-count">${st.editLog.length}</b> 处（您的每次修改将记录改前/改后并回流用于模型优化）
+        ${st.editLog.length ? `<button class="mini-btn" style="margin-left:6px" onclick="toggleEditLog()">查看留痕</button>` : ""}
+      </span>
       <div style="display:flex;gap:10px">
         <button class="btn big" onclick="exportDraftXML()">导出草稿 XML</button>
         <button class="btn primary big" id="confirm-btn">✓ 医生确认无误，提交归档</button>
       </div>
-    </div>`;
+    </div>
+    <div id="editlog-panel"></div>`;
 
   document.getElementById("confirm-btn").onclick = () => {
     if (window.confirm("确认将本份《入院记录》草稿归档至院内系统？\n（演示环境为模拟归档）确认后责任签章记录为：王医生")){
@@ -559,6 +563,33 @@ function toggleSrc(fid, turnIdxs){
     return `<div class="who">转写稿 · ${t.role}（录音 00:${String(3 + i * 7).padStart(2, "0")}）</div>${esc(t.text)}`;
   }).join('<div style="height:6px"></div>')}</div>`;
 }
+function toggleEditLog(){
+  const panel = document.getElementById("editlog-panel");
+  if (panel.innerHTML){ panel.innerHTML = ""; return; }
+  const st = flowState("DA0001_1");
+  panel.innerHTML = `<div class="card" style="padding:14px 18px;margin-top:14px">
+    <div class="md-title">修改留痕（${st.editLog.length} 条 · 随归档包存档，用于审计与模型反馈）</div>
+    ${st.editLog.map((e, i) => `
+      <div style="display:grid;grid-template-columns:34px 130px 1fr 1fr 70px;gap:10px;padding:7px 4px;border-bottom:1px dashed var(--line);font-size:12px;align-items:start">
+        <span style="color:var(--ink-3)">${i + 1}</span>
+        <span style="font-weight:600">${esc(e.field)}</span>
+        <span style="color:var(--ink-3)">改前：${esc(e.before.slice(0, 60)) || "（空）"}</span>
+        <span style="color:var(--green)">改后：${esc(e.after.slice(0, 60))}</span>
+        <span style="color:var(--ink-3);font-family:var(--mono);font-size:10.5px">${esc(e.time)} ${esc(e.doctor)}</span>
+      </div>`).join("")}
+  </div>`;
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function exportEditLog(){
+  const st = flowState("DA0001_1");
+  const payload = { document: "入院记录_DA0001_20260902", confirmedBy: "王医生（住院医师）",
+    exportedAt: new Date().toISOString(), editLog: st.editLog };
+  const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "修改留痕_DA0001_入院记录.json";
+  a.click(); URL.revokeObjectURL(a.href);
+}
 function editField(fid){
   const doc = window._draftDoc, edits = window._draftEdits;
   const f = doc.fields[+fid];
@@ -572,25 +603,40 @@ function editField(fid){
 }
 function saveEdit(fid){
   const ta = document.getElementById(`ta-${fid}`);
-  window._draftEdits[fid] = ta.value;
+  const doc = window._draftDoc, edits = window._draftEdits;
+  const before = edits[fid] !== undefined ? edits[fid] : doc.fields[+fid].value;
+  const after = ta.value;
+  edits[fid] = after;
+  // F8 反馈闭环：修改留痕（改前/改后/字段/时间），归档时可下载
+  const st = flowState("DA0001_1");
+  st.editLog.push({
+    field: doc.fields[+fid].label || "（基本项）",
+    before: String(before), after: String(after),
+    time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    doctor: "王医生",
+  });
   const vv = document.getElementById(`fv-${fid}`);
-  if (vv) vv.textContent = ta.value;
+  if (vv) vv.textContent = after;
   document.getElementById(`edit-zone-${fid}`).innerHTML = "";
+  const n = document.getElementById("editlog-count");
+  if (n) n.textContent = st.editLog.length;
 }
 
 /* ---------------- Step4 归档 ---------------- */
 function renderStepArchive(body, key, adm){
   const doc = window._draftDoc || getPatient("DA0001").admissions[0].docs.find(d => d.type === "入院记录");
+  const st = flowState(key);
   const labeled = doc.fields.filter(f => f.label);
   const xml = buildXML(doc);
   body.innerHTML = `
     <div class="arch-grid">
       <div class="card" style="padding:20px 24px">
         <div class="md-title" style="font-size:16px">归档预览 · XTextDocument（字段回填包）</div>
-        <div style="font-size:12px;color:var(--ink-3);margin-bottom:12px">按院内模板 DataSource/BindingPath 绑定规范回填 · 共 ${labeled.length} 个字段 · ${Object.keys(flowState(key).edits).length} 处医生修改已生效</div>
+        <div style="font-size:12px;color:var(--ink-3);margin-bottom:12px">按院内模板 DataSource/BindingPath 绑定规范回填 · 共 ${labeled.length} 个字段 · ${Object.keys(st.edits).length} 处医生修改已生效</div>
         <div class="xml-view">${esc(xml)}</div>
         <div style="margin-top:14px;display:flex;gap:10px">
           <button class="btn" onclick="downloadXML()">⬇ 下载归档包（模拟）</button>
+          <button class="btn" onclick="exportEditLog()">⬇ 下载修改留痕（${st.editLog.length} 条）</button>
           <button class="btn ghost" onclick="flowState('${key}').step=3;viewAdmission('DA0001',1)">← 返回修改</button>
         </div>
       </div>
@@ -602,6 +648,7 @@ function renderStepArchive(body, key, adm){
         <div class="receipt-line"><span>文书类型</span><b>入院记录 · 慢性阑尾炎</b></div>
         <div class="receipt-line"><span>确认医生</span><b>王医生（住院医师）</b></div>
         <div class="receipt-line"><span>生成方式</span><b>多智能体草稿 + 医生确认</b></div>
+        <div class="receipt-line"><span>医生修改</span><b>${st.editLog.length} 处（留痕已随包存档）</b></div>
         <div class="receipt-line"><span>留痕</span><b>生成/修改/确认 全程可追溯</b></div>
         <div style="margin-top:18px"><button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button></div>
       </div>

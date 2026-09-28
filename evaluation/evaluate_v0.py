@@ -2,7 +2,7 @@
 """
 住院病历生成评测框架 v0 —— 金标准反推评测（PRD 7.1 / 12.2-1,12.2-6）
 ====================================================================
-方法：以医生真实书写完成的《入院记录》为金标准（输出端），用规则生成器 v0
+方法：以医生真实书写完成的《入院记录》《出院记录》为金标准（输出端），用规则生成器 v0
 仅凭 HIS 结构化数据（无录音状态）生成草稿，逐字段对照打分。
 
 指标（PRD 7.2）：
@@ -11,10 +11,10 @@
   对话依赖度 = 金标准中"对话提炼"类(绿)已填字段 / 金标准已填字段数
   —— 对话依赖度即"无录音时的生成天花板"，是录音补采（D1）的量化依据。
 
-生成器接口：generate(fields_gold, his) -> {label: value}
-后续接入 LLM 生成器只需实现同一接口，评测框架与指标不变。
+生成器接口：generate_v0(gold_fields, views, anchor) -> {label: value}
+后续接入 LLM 生成器只需实现同一契约，评测框架与指标不变。
 
-用法：/usr/bin/python3 evaluate_v0.py [病历资料目录]
+用法：python3 evaluate_v0.py [病历资料目录]
 输出：评测报告_v0.md（无 PII：仅指标、字段标签与患者代号）
 """
 import os, re, sys, glob, json, zipfile, difflib, datetime, tempfile
@@ -70,8 +70,8 @@ def sheet_rows(path):
     for r in range(1, sh.nrows):
         yield {h: sh.cell_value(r, i) for i, h in enumerate(hdr)}
 
-def discover_admissions(base_dir, workdir):
-    """解压全部 zip，返回 [(患者代号, 患者目录, 入院记录xml路径)]"""
+def discover_docs(base_dir, workdir):
+    """解压全部 zip，返回 [(患者代号, 患者目录, 文书类型, 文书xml路径)]，覆盖入院/出院记录"""
     results = []
     for folder, code in PATIENT_CODE.items():
         pdir = os.path.join(base_dir, folder)
@@ -85,11 +85,11 @@ def discover_admissions(base_dir, workdir):
                     fixed = fix_zip_name(n)
                     with open(os.path.join(outdir, fixed), 'wb') as f:
                         f.write(zf.read(n))
-            for x in glob.glob(os.path.join(outdir, "入院记录_*.xml")):
-                results.append((code, pdir, x))
+            for dtype in ("入院记录", "出院记录"):
+                for x in glob.glob(os.path.join(outdir, f"{dtype}_*.xml")):
+                    results.append((code, pdir, dtype, x))
     return results
 
-# ---------------- 生成器 v0（规则版：仅用 HIS 结构化数据，无录音/无 LLM） ----------------
 def load_his_views(pdir):
     views = {}
     for name in ("检验申请主表", "检查申请主表", "检查申请项目", "检查结果", "生命体征"):
@@ -97,38 +97,43 @@ def load_his_views(pdir):
         views[name] = list(sheet_rows(p)) if os.path.exists(p) else []
     return views
 
-def generate_v0(gold_fields, views):
-    """规则生成器：只填 HIS 可推导字段；对话依赖字段一律留空（黄）。"""
+# ---------------- 生成器 v0（规则版：仅用 HIS 结构化数据，无录音/无 LLM） ----------------
+def generate_v0(gold_fields, views, anchor="入院"):
+    """规则生成器：只填 HIS 可推导字段；对话依赖字段一律留空。
+    anchor：入院记录取"入院"事件行、出院记录取"出院"事件行作为体征时间锚点。"""
     gen = {}
-    # 入院锚点：优先用生命体征表中的"入院"事件行（HIS 天然提供），否则退回 gold 基本信息时间
-    admit_dt = None
+    anchor_dt = None
     for v in views["生命体征"]:
-        if str(v.get("VITAL_SIGNS")).strip() == "入院":
-            admit_dt = excel_date(v.get("TIME_POINT"))
-            if admit_dt: break
-    if admit_dt is None:
+        if str(v.get("VITAL_SIGNS")).strip() == anchor:
+            anchor_dt = excel_date(v.get("TIME_POINT"))
+            if anchor_dt: break
+    if anchor_dt is None:
         for f in gold_fields:
             m = re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", str(f["value"]))
             if f["binding"] == "Patient" and m:
-                admit_dt = datetime.datetime.strptime(m.group(0), "%Y-%m-%d %H:%M:%S")
+                anchor_dt = datetime.datetime.strptime(m.group(0), "%Y-%m-%d %H:%M:%S")
                 break
-    # 生命体征：取入院前后 24h 内距入院时刻最近的一条
-    win = [v for v in views["生命体征"]
-           if admit_dt and (d := excel_date(v.get("TIME_POINT"))) and abs((d - admit_dt).total_seconds()) <= 86400]
+    # 生命体征：取锚点前后 24h 内距锚点最近的一条
+    win = []
+    if anchor_dt:
+        for v in views["生命体征"]:
+            d = excel_date(v.get("TIME_POINT"))
+            if d and abs((d - anchor_dt).total_seconds()) <= 86400:
+                win.append(v)
     pick = {}
     for v in win:
         d = excel_date(v.get("TIME_POINT"))
         name, val = str(v.get("VITAL_SIGNS")), str(v.get("VITAL_SIGNS_CVALUES")).strip()
-        if not val: continue
-        if name not in pick or abs((d - admit_dt).total_seconds()) < pick[name][0]:
-            pick[name] = (abs((d - admit_dt).total_seconds()), val)
-    mapping = {"腋下体温": "体温", "脉搏": "脉搏", "呼吸": "呼吸"}
-    for src, dst in mapping.items():
+        if not val or name not in ("腋下体温", "脉搏", "呼吸", "血压"): continue
+        dist = abs((d - anchor_dt).total_seconds()) if d else 1e18
+        if name not in pick or dist < pick[name][0]:
+            pick[name] = (dist, val)
+    for src, dst in (("腋下体温", "体温"), ("脉搏", "脉搏"), ("呼吸", "呼吸")):
         if src in pick: gen[dst] = pick[src][1]
     if "血压" in pick and "/" in pick["血压"][1]:
         hi, _, lo = pick["血压"][1].partition("/")
         gen["收缩压"], gen["舒张压"] = hi.strip(), lo.strip()
-    # 辅助检查结果：检查申请 + 结果印象拼接
+    # 辅助检查：检查申请 + 结果印象拼接
     item_by_no = {}
     for it in views["检查申请项目"]:
         item_by_no.setdefault(str(it.get("EXAM_NO")), str(it.get("EXAM_ITEM")))
@@ -142,49 +147,51 @@ def generate_v0(gold_fields, views):
         item = item_by_no.get(no, str(req.get("EXAM_SUB_CLASS")))
         lines.append(f"{ds}  {item}：{imp_rows[0]['IMPRESSION'].strip()}")
     if lines: gen["辅助检查结果"] = "\n".join(lines)
-    # 初步诊断：申请单上的临床诊断去重编号
+    if "辅助检查" not in gen:
+        gen["辅助检查"] = gen.get("辅助检查结果", "")
+    # 诊断：申请单临床诊断去重编号
     diags = []
     for req in views["检查申请主表"] + views["检验申请主表"]:
         for key in ("CLIN_DIAG", "RELEVANT_CLINIC_DIAG"):
-            d = str(req.get(key, "")).strip()
+            d = str(req.get(key, "") if key in req else "").strip()
             if d and d not in diags and not d.startswith("常规"):
                 diags.append(d)
-    if diags: gen["初步诊断"] = "\n".join(f"{i+1}.{d}" for i, d in enumerate(diags[:5]))
+    if diags:
+        gen["初步诊断"] = "\n".join(f"{i+1}.{d}" for i, d in enumerate(diags[:5]))
+        gen["出院诊断"] = gen["初步诊断"]
     return gen
 
 # ---------------- 对比与指标 ----------------
 def norm(v):
-    s = str(v).strip().strip("{}").replace("\r", "").replace(" ", "")
-    return s
+    return str(v).strip().strip("{}").replace("\r", "").replace(" ", "")
 
 def match(gen_val, gold_val, label):
     g, go = norm(gen_val), norm(gold_val)
     if not g or not go: return 0.0
     if label in NUMERIC_LABELS:
         try:
-            a, b = float(re.sub(r"[^\d.]", "", g) or "nan"), float(re.sub(r"[^\d.]", "", go) or "nan")
+            a = float(re.sub(r"[^\d.]", "", g) or "nan")
+            b = float(re.sub(r"[^\d.]", "", go) or "nan")
             if a == b: return 1.0
             if b != 0 and abs(a - b) / abs(b) <= 0.05: return 1.0
             return 0.0
         except Exception: return 0.0
-    r = difflib.SequenceMatcher(None, g, go).ratio()
     if g in go or go in g: return 1.0
-    return 1.0 if r >= 0.6 else 0.0
+    return 1.0 if difflib.SequenceMatcher(None, g, go).ratio() >= 0.6 else 0.0
 
-def evaluate_one(code, gold_fields, views):
+def evaluate_one(code, gold_fields, views, anchor="入院", doc_type="入院记录"):
     labeled = [f for f in gold_fields if f["label"]]
     by_label_gold = {}
     for f in labeled:
         if str(f["value"]).strip():
             by_label_gold.setdefault(f["label"], []).append(f)
-    cls = {}
-    for label in by_label_gold:
-        cls[label] = color_of({"label": label, "binding": by_label_gold[label][0]["binding"], "value": "x"})
-    gen = generate_v0(gold_fields, views)
+    cls = {label: color_of({"label": label, "binding": fs[0]["binding"], "value": "x"})
+           for label, fs in by_label_gold.items()}
+    gen = generate_v0(gold_fields, views, anchor=anchor)
     filled = hit = 0
     hit_labels, miss_labels = [], []
     for label, fs in by_label_gold.items():
-        if label not in gen: continue
+        if label not in gen or not str(gen[label]).strip(): continue
         filled += len(fs)
         h = sum(1 for f in fs if match(gen[label], f["value"], label) > 0)
         hit += h
@@ -192,63 +199,74 @@ def evaluate_one(code, gold_fields, views):
     total_gold = sum(len(fs) for fs in by_label_gold.values())
     green_cnt = sum(len(fs) for l, fs in by_label_gold.items() if cls[l] == "green")
     return {
-        "code": code, "G": total_gold, "F": filled, "H": hit,
+        "code": code, "doc_type": doc_type, "G": total_gold, "F": filled, "H": hit,
         "coverage": hit / total_gold if total_gold else 0,
         "accuracy": hit / filled if filled else 0,
         "green_ratio": green_cnt / total_gold if total_gold else 0,
-        "gen_filled": len(gen), "hit_labels": hit_labels, "miss_labels": miss_labels,
+        "hit_labels": hit_labels, "miss_labels": miss_labels,
         "cls_counts": {c: sum(1 for l in by_label_gold if cls[l] == c) for c in ("blue", "green", "gray", "yellow")},
     }
 
-# ---------------- 主流程 ----------------
+# ---------------- 报告 ----------------
 def main(base_dir):
     out_dir = os.path.dirname(os.path.abspath(__file__))
     with tempfile.TemporaryDirectory() as workdir:
-        adm = discover_admissions(base_dir, workdir)
-        rows = []
-        for code, pdir, xml in sorted(adm):
+        docs = discover_docs(base_dir, workdir)
+        groups = {}
+        for code, pdir, dtype, xml in sorted(docs):
             gold = parse_doc_fields(xml)
             views = load_his_views(pdir)
-            rows.append(evaluate_one(code, gold, views))
-    n = len(rows)
-    def avg(k): return sum(r[k] for r in rows) / n if n else 0
+            anchor = "入院" if dtype == "入院记录" else "出院"
+            groups.setdefault(dtype, []).append(
+                evaluate_one(code, gold, views, anchor=anchor, doc_type=dtype))
+
+    def avg(k, rows): return sum(r[k] for r in rows) / len(rows) if rows else 0
     lines = []
     lines.append("# 住院病历生成评测报告 v0（金标准反推 · 无录音基线）\n")
-    lines.append(f"- 日期：{datetime.date.today().isoformat()}　|　文书：《入院记录》× {n} 份住院次　|　生成器：规则版 v0（仅 HIS 结构化数据，无录音、无 LLM）")
-    lines.append("- 方法：PRD 7.1 金标准对照法。医生真实书写的入院记录为金标准，规则生成器从 HIS 视图（生命体征/检查申请与结果/临床诊断）生成草稿，逐字段对照。文本相似度 ≥0.6 记命中，数值按 5% 容差。\n")
+    n_adm, n_dis = len(groups.get("入院记录", [])), len(groups.get("出院记录", []))
+    lines.append(f"- 日期：{datetime.date.today().isoformat()}　|　文书：入院记录 × {n_adm} + 出院记录 × {n_dis}　|　生成器：规则版 v0（仅 HIS 结构化数据，无录音、无 LLM）")
+    lines.append("- 方法：PRD 7.1 金标准对照法。医生真实书写的文书为金标准，规则生成器从 HIS 视图（生命体征/检查申请与结果/临床诊断）生成草稿，逐字段对照。文本相似度 ≥0.6 记命中，数值按 5% 容差。\n")
     lines.append("## 一、核心结论\n")
-    lines.append(f"1. **无录音状态下，规则生成器只能覆盖入院记录金标准内容的 {avg('coverage')*100:.1f}%**（跨 {n} 份均值）——缺口的主体是对话来源字段（主诉、现病史、既往史等）。")
-    lines.append(f"2. **金标准中对录音的依赖度为 {avg('green_ratio')*100:.1f}%**：这些字段只可能来自医患对话（出生地、既往史、发病经过等），结构化数据里不存在。这正是 PRD 风险 D1（录音补采）的量化依据：**不补录音，入院记录生成上限约 {100-avg('green_ratio')*100:.0f}%，无法达到验收阈值（PRD 7.2 建议覆盖率 ≥90%）**。")
-    lines.append(f"3. 生成器已填字段的准确率为 {avg('accuracy')*100:.1f}%：生命体征类基本命中；'初步诊断'（申请单临床诊断 vs 医生书写的规范诊断）与'辅助检查结果'（多报告拼接格式差异）命中不稳定——这类字段需要 LLM 的归纳改写能力，是 P1 多智能体核心的验证重点。\n")
-    lines.append("## 二、分住院次明细\n")
-    lines.append("| 患者代号 | 金标准已填 G | 生成填写 F | 命中 H | 覆盖率 H/G | 准确率 H/F | 录音依赖度(绿/G) | 分类(蓝/绿/灰/黄) |")
-    lines.append("|---|---|---|---|---|---|---|---|")
-    for r in rows:
-        c = r["cls_counts"]
-        lines.append(f"| {r['code']} | {r['G']} | {r['F']} | {r['H']} | {r['coverage']*100:.0f}% | {r['accuracy']*100:.0f}% | {r['green_ratio']*100:.0f}% | {c['blue']}/{c['green']}/{c['gray']}/{c['yellow']} |")
-    lines.append(f"| **均值** | — | — | — | **{avg('coverage')*100:.1f}%** | **{avg('accuracy')*100:.1f}%** | **{avg('green_ratio')*100:.1f}%** | — |\n")
+    if n_adm:
+        grn_adm = avg("green_ratio", groups["入院记录"])
+        lines.append(f"1. **入院记录：录音依赖度 {grn_adm*100:.1f}%**（主诉/现病史/既往史/个人史/家族史只存在于医患对话），无录音基线覆盖率 {avg('coverage', groups['入院记录'])*100:.1f}%——**不补录音，入院记录生成上限约 {100-grn_adm*100:.0f}%，无法达到验收阈值（PRD 7.2 建议覆盖率 ≥90%）**。这是录音补采（PRD 风险 D1）的量化依据。")
+    if n_dis:
+        grn_dis = avg("green_ratio", groups["出院记录"])
+        lines.append(f"2. **出院记录：录音依赖度 {grn_dis*100:.1f}%（高于入院记录），无录音基线覆盖率 {avg('coverage', groups['出院记录'])*100:.1f}%**——诊疗经过、出入院情况等叙述性内容同样出自医生口述，说明**单纯增加结构化数据无法绕开录音依赖，医患/医护对话数据是全部文书类型的共同先决条件**，录音补采（D1）的优先级进一步提升。")
+    if n_adm and n_dis:
+        lines.append(f"3. 规则版已填字段准确率：入院 {avg('accuracy', groups['入院记录'])*100:.1f}% / 出院 {avg('accuracy', groups['出院记录'])*100:.1f}%。生命体征类基本命中；'初步/出院诊断'（申请单临床诊断 vs 医生规范诊断）与'辅助检查'（多报告拼接格式）命中不稳定——需要 LLM 归纳改写，是 P1 多智能体核心的验证重点。\n")
+    for dtype, rows in groups.items():
+        lines.append(f"## {dtype}分住院次明细\n")
+        lines.append("| 患者代号 | 金标准已填 G | 生成填写 F | 命中 H | 覆盖率 H/G | 准确率 H/F | 录音依赖度(绿/G) | 分类(蓝/绿/灰/黄) |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for r in rows:
+            c = r["cls_counts"]
+            lines.append(f"| {r['code']} | {r['G']} | {r['F']} | {r['H']} | {r['coverage']*100:.0f}% | {r['accuracy']*100:.0f}% | {r['green_ratio']*100:.0f}% | {c['blue']}/{c['green']}/{c['gray']}/{c['yellow']} |")
+        lines.append(f"| **均值** | — | — | — | **{avg('coverage', rows)*100:.1f}%** | **{avg('accuracy', rows)*100:.1f}%** | **{avg('green_ratio', rows)*100:.1f}%** | — |\n")
     hitset, missset = {}, {}
-    for r in rows:
-        for l in r["hit_labels"]: hitset[l] = hitset.get(l, 0) + 1
-        for l in r["miss_labels"]: missset[l] = missset.get(l, 0) + 1
-    lines.append("## 三、字段级分析\n")
-    lines.append("### 规则生成器稳定命中的字段（HIS 可推导）\n")
+    for rows in groups.values():
+        for r in rows:
+            for l in r["hit_labels"]: hitset[l] = hitset.get(l, 0) + 1
+            for l in r["miss_labels"]: missset[l] = missset.get(l, 0) + 1
+    lines.append("## 字段级分析\n")
+    lines.append("### 规则生成器命中的字段（HIS 可推导，跨全部文书）\n")
     lines.append("、".join(f"{k}(×{v})" for k, v in sorted(hitset.items(), key=lambda x: -x[1])) or "（无）")
-    lines.append("\n\n### 生成器尝试但未命中的字段（需 LLM 归纳改写或更细规则）\n")
+    lines.append("\n### 生成器尝试但未命中的字段（需 LLM 归纳改写或更细规则）\n")
     lines.append("、".join(f"{k}(×{v})" for k, v in sorted(missset.items(), key=lambda x: -x[1])) or "（无）")
-    lines.append("\n\n### 完全依赖录音的字段类别（生成器未尝试）\n")
-    lines.append("主诉、现病史全部子项、既往史全部子项、个人史、婚育史、家族史——即入院记录的主体叙述内容。\n")
-    lines.append("## 四、下一步\n")
+    lines.append("\n### 完全依赖录音的字段类别（生成器未尝试）\n")
+    lines.append("入院记录：主诉、现病史全部子项、既往史全部子项、个人史、婚育史、家族史；出院记录：入院情况叙述、诊疗经过、出院情况。\n")
+    lines.append("## 下一步\n")
     lines.append("1. **录音补采到位后**：以真实对话录音重跑本框架（生成器换 ASR+LLM 链路），形成完整端到端基线。")
     lines.append("2. **P1 接入 LLM 生成器**：实现与 `generate_v0` 同签名的 `generate_llm()`，本框架指标与报告结构不变，双周回归（PRD 12.2-6）。")
-    lines.append("3. **扩展文书类型**：先出院记录（HIS 汇总占比更高、预计无录音覆盖率更好），再首次病程。")
-    lines.append("4. 阈值判断：当前基线距 PRD 7.2 建议验收值（覆盖率≥90%、可用率≥80%）的差距 = 录音依赖度 + LLM 改写能力两部分，前者是数据问题（D1），后者是一期核心研发内容。")
+    lines.append("3. **扩展文书类型**：下一步首次病程记录（鉴别诊断等知识辅助字段是 LLM 价值点）。")
+    lines.append("4. 阈值判断：距 PRD 7.2 建议验收值（覆盖率≥90%、可用率≥80%）的差距 = 录音依赖度 + LLM 改写能力两部分，前者是数据问题（D1），后者是一期核心研发内容。")
     report = "\n".join(lines)
     out = os.path.join(out_dir, "评测报告_v0.md")
     with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print("REPORT_WRITTEN:", out)
-    print(f"汇总：n={n} 覆盖率={avg('coverage')*100:.1f}% 准确率={avg('accuracy')*100:.1f}% 录音依赖度={avg('green_ratio')*100:.1f}%")
+    for dtype, rows in groups.items():
+        print(f"  {dtype}: n={len(rows)} 覆盖率={avg('coverage', rows)*100:.1f}% 准确率={avg('accuracy', rows)*100:.1f}% 录音依赖度={avg('green_ratio', rows)*100:.1f}%")
 
 if __name__ == "__main__":
     base = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "病历资料", "住院")
