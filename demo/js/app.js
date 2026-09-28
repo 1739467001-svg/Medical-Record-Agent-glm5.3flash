@@ -421,14 +421,36 @@ function finishTranscript(tp, key){
       <div class="who">${t.role}</div><div class="ts-bubble">${esc(t.text)}</div>
     </div>`).join("") + `
     <div class="md-doc">
-      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线</div>
-      <div class="md-body">问诊记录_DA0001_202609021040.md&nbsp;&nbsp;·&nbsp;&nbsp;27 轮对话 · ${S.dialogue.reduce((n, t) => n + t.text.length, 0)} 字 · 医生/患者角色已分离 · 全文可溯源</div>
-      <div style="margin-top:14px;display:flex;gap:10px">
+      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${flowState(key).transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}</div>
+      <div class="md-body">问诊记录_DA0001_202609021040.md&nbsp;&nbsp;·&nbsp;&nbsp;27 轮对话 · ${flowState(key).transcriptEdit !== undefined ? flowState(key).transcriptEdit.length : S.dialogue.reduce((n, t) => n + t.text.length, 0)} 字 · 医生/患者角色已分离 · 全文可溯源</div>
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn primary big" id="gen-cta">⚙ 生成入院记录草稿（多智能体）</button>
-        <button class="btn big" onclick="location.hash='#/adm/DA0001/1';viewAdmission('DA0001',1)">重听问诊</button>
+        <button class="btn big" id="edit-ts">✎ 修正过程稿</button>
       </div>
     </div>`;
   document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; persistFlow(key); viewAdmission("DA0001", 1); };
+  document.getElementById("edit-ts").onclick = () => editTranscript(tp, key);
+  const mdEl = tp.querySelector(".md-doc");
+  if (mdEl) mdEl.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function editTranscript(tp, key){
+  const st = flowState(key);
+  const cur = st.transcriptEdit !== undefined ? st.transcriptEdit
+    : S.dialogue.map(t => (t.role === "医生" ? "医生" : "患者") + "：" + t.text).join("\n");
+  const zone = tp.querySelector(".md-doc");
+  zone.innerHTML = `
+    <div class="md-title">✎ 修正转写过程稿（原稿留痕，修正将标记并参与生成）</div>
+    <textarea id="ts-edit" style="width:100%;min-height:220px;font-family:var(--sans);font-size:12.5px;line-height:1.9;border:1.5px solid var(--primary);border-radius:9px;padding:10px 12px;box-sizing:border-box">${esc(cur)}</textarea>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button class="mini-btn" style="background:var(--primary);border-color:var(--primary);color:#fff" id="ts-save">保存修正</button>
+      <button class="mini-btn" id="ts-cancel">取消</button>
+    </div>`;
+  document.getElementById("ts-cancel").onclick = () => finishTranscript(tp, key);
+  document.getElementById("ts-save").onclick = () => {
+    st.transcriptEdit = document.getElementById("ts-edit").value;
+    persistFlow(key);
+    finishTranscript(tp, key);
+  };
 }
 
 /* ---------------- Step2 多智能体生成 ---------------- */
@@ -478,7 +500,12 @@ function renderStepGenerate(body, key, adm){
   const run = () => {
     if (i >= total){
       document.getElementById("gen-bar").style.width = "100%";
-      document.getElementById("gen-done").innerHTML = `<button class="btn primary big" id="to-confirm">进入四色确认 →</button>`;
+      document.getElementById("gen-done").innerHTML = `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+          <button class="btn primary big" id="to-confirm">进入四色确认 →</button>
+          <button class="btn big" id="regen">↻ 重新生成</button>
+        </div>`;
+      document.getElementById("regen").onclick = () => { const b = document.getElementById("step-body"); renderStepGenerate(b, "DA0001_1", getAdm("DA0001", 1)); };
       document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
       return;
     }
@@ -527,6 +554,8 @@ function renderStepConfirm(body, key, adm){
     </div>
     <div class="confirm-stats sticky-stats">
       ${filters.map(([k, name]) => `<div class="cs-item ${st.filter === k ? "filter-on" : ""}" style="cursor:pointer" onclick="setConfirmFilter('${k}')">${name}</div>`).join("")}
+      <div class="cs-item clickable" onclick="toggleAllSections(true)">展开全部</div>
+      <div class="cs-item clickable" onclick="toggleAllSections(false)">收起全部</div>
       ${Object.entries(COLOR_META).map(([k, m]) => `<div class="cs-item clickable" onclick="jumpToColor('${k}')"><span class="dot ${m.dot}"></span>${m.name}<b>${cCount[k]}</b></div>`).join("")}
       <div class="cs-item" style="color:var(--yellow);border-color:#ecd9ae;background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组取值冲突 · 点颜色定位字段</div>
     </div>
@@ -559,9 +588,11 @@ function renderStepConfirm(body, key, adm){
 
   window._confirmCtx = { body, key, adm };
   document.getElementById("confirm-btn").onclick = () => {
+    const doctor = window.prompt("请输入确认医生姓名（将作为签章写入留痕与回执）：", st.confirmedBy || "王医生");
+    if (!doctor) return;
     const miss = cCount.yellow;
-    if (window.confirm("确认将本份《入院记录》草稿归档至院内系统？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n（演示环境为模拟归档）确认后责任签章记录为：王医生")){
-      flowState(key).step = 4; persistFlow(key); viewAdmission("DA0001", 1);
+    if (window.confirm("签章医生：" + doctor + "\n确认将本份《入院记录》草稿归档至院内系统？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n（演示环境为模拟归档）")){
+      const st2 = flowState(key); st2.step = 4; st2.confirmedBy = doctor || st2.confirmedBy; persistFlow(key); viewAdmission("DA0001", 1);
     }
   };
   window._draftDoc = doc;
@@ -570,6 +601,9 @@ function renderStepConfirm(body, key, adm){
 function setConfirmFilter(k){
   const st = flowState("DA0001_1"); st.filter = k; persistFlow("DA0001_1");
   const ctx = window._confirmCtx; if (ctx) renderStepConfirm(ctx.body, ctx.key, ctx.adm);
+}
+function toggleAllSections(open){
+  document.querySelectorAll(".sec-block").forEach(s => s.classList.toggle("open", open));
 }
 function jumpToColor(color){
   const el = document.querySelector(`.f-row[data-color="${color}"]`);
@@ -667,6 +701,9 @@ function saveEdit(fid){
   const vv = document.getElementById(`fv-${fid}`);
   if (vv) vv.textContent = after;
   document.getElementById(`edit-zone-${fid}`).innerHTML = "";
+  const lb = document.querySelector(`#frow-${fid} .lb`);
+  if (lb && !lb.querySelector(".edited-chip"))
+    lb.insertAdjacentHTML("beforeend", '<span class="tag edited-chip" style="background:var(--green-bg);color:var(--green)">✓ 已更新</span>');
   const n = document.getElementById("editlog-count");
   if (n) n.textContent = st.editLog.length;
 }
@@ -695,11 +732,14 @@ function renderStepArchive(body, key, adm){
         <div style="font-size:12px;color:var(--ink-3);margin-bottom:16px">正式环境经对接层回写院内电子病历系统</div>
         <div class="receipt-line"><span>归档编号</span><b>AR-20260902-0047</b></div>
         <div class="receipt-line"><span>文书类型</span><b>入院记录 · 慢性阑尾炎</b></div>
-        <div class="receipt-line"><span>确认医生</span><b>王医生（住院医师）</b></div>
+        <div class="receipt-line"><span>确认医生（签章）</span><b>${esc((flowState(key).confirmedBy || "王医生") + "（住院医师）")}</b></div>
         <div class="receipt-line"><span>生成方式</span><b>多智能体草稿 + 医生确认</b></div>
         <div class="receipt-line"><span>医生修改</span><b>${st.editLog.length} 处（留痕已随包存档）</b></div>
         <div class="receipt-line"><span>留痕</span><b>生成/修改/确认 全程可追溯</b></div>
-        <div style="margin-top:18px"><button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button></div>
+        <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+          <button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button>
+          <button class="btn big" onclick="location.hash='#/patient/DA0001'">在患者全景中查看</button>
+        </div>
       </div>
     </div>`;
 }
