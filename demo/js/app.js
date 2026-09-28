@@ -77,13 +77,14 @@ function route(){
   const parts = hash.slice(2).split("/");
   const [view, a, b] = parts;
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.remove("active"));
-  const navMap = { workbench: "工作台", about: "说明" };
+  const navMap = { workbench: "工作台", manual: "手册", about: "说明" };
   const navEl = [...document.querySelectorAll("[data-nav]")].find(n => n.textContent === navMap[view]);
   if (navEl) navEl.classList.add("active");
   window.scrollTo(0, 0);
   if (view === "patient" && a) return viewPatient(a);
   if (view === "adm" && a && b) return viewAdmission(a, +b);
   if (view === "fieldmap") return viewFieldmap();
+  if (view === "manual") return viewManual();
   if (view === "about") return viewAbout();
   viewWorkbench();
 }
@@ -99,7 +100,7 @@ function viewWorkbench(){
     <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者已脱敏（患者A / 患者B），数据源自院方提供的真实住院病历（金标准）；"录音转写"为按真实入院记录重构的模拟对话，"AI 生成"内容取自金标准文书以演示确认流程。正式环境中草稿由多智能体实时生成。</div>
     <div class="page-head">
       <div class="page-title">工作台<small>王医生 · 普外科 · 演示数据集</small></div>
-      <button class="btn" onclick="location.hash='#/about'">了解系统边界</button>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
     </div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default">今日书写任务</div>
     <div class="task-list">
@@ -265,8 +266,15 @@ function closeModal(){ document.getElementById("modal-root").innerHTML = ""; }
 /* 住院工作区（核心流程）                                            */
 /* ================================================================ */
 function flowState(key){
-  if (!S.flow[key]) S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false };
+  if (!S.flow[key]){
+    try { S.flow[key] = JSON.parse(localStorage.getItem("mra_flow_" + key)) || null; } catch (e) {}
+    if (!S.flow[key] || typeof S.flow[key] !== "object")
+      S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false };
+  }
   return S.flow[key];
+}
+function persistFlow(key){
+  try { localStorage.setItem("mra_flow_" + key, JSON.stringify(S.flow[key])); } catch (e) {}
 }
 function viewAdmission(code, idx){
   const p = getPatient(code), adm = getAdm(code, idx);
@@ -402,7 +410,7 @@ function finishTranscript(tp, key){
         <button class="btn big" onclick="location.hash='#/adm/DA0001/1';viewAdmission('DA0001',1)">重听问诊</button>
       </div>
     </div>`;
-  document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; viewAdmission("DA0001", 1); };
+  document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; persistFlow(key); viewAdmission("DA0001", 1); };
 }
 
 /* ---------------- Step2 多智能体生成 ---------------- */
@@ -453,7 +461,7 @@ function renderStepGenerate(body, key, adm){
     if (i >= total){
       document.getElementById("gen-bar").style.width = "100%";
       document.getElementById("gen-done").innerHTML = `<button class="btn primary big" id="to-confirm">进入四色确认 →</button>`;
-      document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; viewAdmission("DA0001", 1); };
+      document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
       return;
     }
     const card = document.getElementById(`ag-${i}`);
@@ -494,7 +502,7 @@ function renderStepConfirm(body, key, adm){
     <div class="legend">
       ${Object.entries(COLOR_META).map(([k, m]) => `<span><span class="cdot ${m.dot}"></span>${m.name} —— ${m.tip}</span>`).join("")}
     </div>
-    <div class="confirm-stats">
+    <div class="confirm-stats sticky-stats">
       ${Object.entries(COLOR_META).map(([k, m]) => `<div class="cs-item"><span class="dot ${m.dot}"></span>${m.name}<b>${cCount[k]}</b></div>`).join("")}
       <div class="cs-item" style="margin-left:auto;color:var(--yellow);border-color:#ecd9ae;background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组字段取值冲突待裁定 · ${cCount.yellow} 项缺失待补</div>
     </div>
@@ -523,7 +531,7 @@ function renderStepConfirm(body, key, adm){
 
   document.getElementById("confirm-btn").onclick = () => {
     if (window.confirm("确认将本份《入院记录》草稿归档至院内系统？\n（演示环境为模拟归档）确认后责任签章记录为：王医生")){
-      flowState(key).step = 4; viewAdmission("DA0001", 1);
+      flowState(key).step = 4; persistFlow(key); viewAdmission("DA0001", 1);
     }
   };
   window._draftDoc = doc;
@@ -615,6 +623,7 @@ function saveEdit(fid){
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
     doctor: "王医生",
   });
+  persistFlow("DA0001_1");
   const vv = document.getElementById(`fv-${fid}`);
   if (vv) vv.textContent = after;
   document.getElementById(`edit-zone-${fid}`).innerHTML = "";
@@ -717,6 +726,42 @@ function viewFieldmap(filterText = ""){
     window._fmT = setTimeout(() => viewFieldmap(v), 250);
   };
   const q = document.getElementById("fm-q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+}
+
+/* ================================================================ */
+/* 操作手册页                                                        */
+/* ================================================================ */
+function viewManual(){
+  $app.innerHTML = `
+  <div class="about-prose">
+    <div class="page-title" style="margin-bottom:14px">医生操作手册<small>3 分钟上手 · 面向住院/管床医生</small></div>
+    <div class="card kcard">
+      <h2>一、它帮你做什么</h2>
+      <p>把你<b>对病人说的、问的、查的</b>变成规范的住院病历草稿：你负责看病和说话，系统负责听、转写、组织成文，你最后核对签认。它不替你做诊断——<b>归档前必须经你确认</b>。</p>
+      <h2>二、一次完整的使用（以入院记录为例）</h2>
+      <ul>
+        <li><b>第 1 步 · 选择病人</b>：工作台 → 我的患者 → 进入本次住院。系统已自动从 HIS 带入基本信息、检验检查、医嘱。</li>
+        <li><b>第 2 步 · 问诊录音</b>：点击「开始录音」，像平常一样问诊。山东方言实时转成普通话文字，系统自动区分你和病人说的话。</li>
+        <li><b>第 3 步 · AI 生成</b>：问诊结束点「结束问诊」，六个智能体自动工作（抽取你的话 → 汇总检验检查 → 检索诊疗规范 → 按本院模板写草稿 → 自查 → 对准模板字段），约十几秒。</li>
+        <li><b>第 4 步 · 四色核对（核心）</b>：优先看<b>黄色</b>（缺什么补什么）和<b>绿色</b>（点「溯源」对照对话原文，不是你的意思就改）。要改点「修改」，每处修改自动留痕。</li>
+        <li><b>第 5 步 · 确认归档</b>：点「医生确认无误，提交归档」→ 进入院内系统。中途关掉页面不会丢，回来接着做。</li>
+      </ul>
+      <h2>三、四种颜色怎么读</h2>
+      <ul>
+        <li>🔵 <b>蓝 · 系统带入</b>：来自 HIS 的数据（姓名、检验值等），抽查即可。</li>
+        <li>🟢 <b>绿 · 对话提炼</b>：从你与病人的对话中提炼（主诉、现病史等），<b>点「溯源」对照录音原文</b>。</li>
+        <li>⚪ <b>灰 · 规范所见</b>：按模板常规合成的查体所见与鉴别诊断，请过目核定。</li>
+        <li>🟡 <b>黄 · 缺失待补</b>：对话里没提到、系统不敢写的——<b>宁缺毋造</b>，需要你补录。</li>
+      </ul>
+      <h2>四、常见问题</h2>
+      <ul>
+        <li><b>病人说方言听不准怎么办？</b>转写稿可手动修改后再生成；录音原声保留，可回放定位。</li>
+        <li><b>写错了算谁的？</b>AI 只出草稿；确认前的修改都会记录改前改后；归档后走院内修改流程。责任主体始终是医生。</li>
+        <li><b>数据安全吗？</b>患者数据加密存储、私有化部署不出院；生成、修改、确认、归档全程留痕可审计。</li>
+      </ul>
+      <div style="margin-top:16px"><button class="btn primary big" onclick="location.hash='#/workbench'">← 返回工作台开始使用</button></div>
+    </div>
+  </div>`;
 }
 
 /* ================================================================ */

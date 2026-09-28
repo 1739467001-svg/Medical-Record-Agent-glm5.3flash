@@ -518,3 +518,11 @@ table.fm .mono{font-family:var(--mono);font-size:11px;color:var(--primary-deep)}
   .f-row .vv{font-size:15px}
   .ts-bubble{font-size:15.5px}
 }
+
+/* 确认页统计吸顶 */
+.sticky-stats{
+  position:sticky;top:64px;z-index:40;
+  background:var(--paper);padding:10px 12px;margin:0 -12px 14px;
+  box-shadow:0 6px 16px -10px rgba(28,48,42,.18);
+}
+@media (max-width:640px){ .sticky-stats{top:56px} }

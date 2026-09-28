@@ -19,3 +19,4 @@ node_modules/
 .venv/
 venv/
 tmp/
+evaluation/.llm_env
