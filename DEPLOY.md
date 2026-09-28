@@ -12,6 +12,8 @@
 | 公网访问 | **http://60.205.204.162/mra/**（经宿主 nginx 反代，端口不对公网开放） |
 | 导航页 | 已登记 `directory_public=true`（display_name：AI 病历智能体 · 医生工作台 Demo） |
 | 资源限制 | mem 96m（实测 ~9MiB）· cpus 0.5 · 日志 json-file 1m×3 · restart unless-stopped · 健康检查 30s |
+| LLM API 服务 | mra-llm-api 容器（python:3.12-alpine，ECR 源），**127.0.0.1:3905**→8090，公网经 `/mra/api/` 反代；密钥存 `/srv/apps/medical-record-agent/.llm_env`（chmod 600，不入 Git）；限流 6 次/分；数据源为脱敏 patients.json |
+| AI 功能 | 患者全景页「⚡ AI 病例总结」：DeepSeek-v4-flash 实时生成五节病例总结（入院主诉诊断/治疗措施/异常检验/住院经过/综合分析），AI 草稿须经医生核对 |
 
 ## 日常操作（服务器上）
 
@@ -47,6 +49,18 @@ tar czf /root/backup-mra-$(date +%F).tgz /srv/apps/medical-record-agent/{docker-
 git add -A && git commit -m "..." && git push
 # 服务器：
 cd /srv/apps/medical-record-agent/repo && git pull
+```
+
+### ⚠️ 2026-09-28 同步状态备注（服务器到 GitHub 网络中断期间的处置）
+
+服务器网络连 GitHub 不稳定，r4d9daa0 的两个文件已用 SFTP 手工同步（内容与 Git 完全一致，在 repo 中为 untracked）：
+- `repo/server/llm_api.py`、`repo/demo/js/app.js`
+
+**下次 `git pull` 恢复正常时**，如报 "untracked working tree file would be overwritten"，执行：
+```bash
+cd /srv/apps/medical-record-agent/repo
+rm server/llm_api.py demo/js/app.js && git pull   # pull 回的内容与手工放置的完全一致
+docker compose restart medical-record-agent llm-api
 ```
 
 ## 边界与注意
