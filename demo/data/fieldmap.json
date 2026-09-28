@@ -1,0 +1,2411 @@
+{
+ "generatedAt": "2026-09-28T11:06:23",
+ "totalDocs": 75,
+ "fields": [
+  {
+   "label": "",
+   "bindings": {
+    "Patient": 127
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "手术记录",
+    "病程记录",
+    "知情文件"
+   ]
+  },
+  {
+   "label": "时间单位",
+   "bindings": {
+    "field1": 47
+   },
+   "dropdown": true,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "数字",
+   "bindings": {
+    "field1": 41,
+    "DL_XBS_FY": 3,
+    "field11": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "症状",
+   "bindings": {
+    "A01.03": 13,
+    "A01.04": 10,
+    "DL_ZS_FY": 6,
+    "DL_XBS_FY": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "持续时间",
+   "bindings": {
+    "field1": 27
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "主诉",
+   "bindings": {
+    "A01.03": 11,
+    "DL_ZS_FY": 4,
+    "field1": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "主要症状",
+   "bindings": {
+    "A01.03": 13,
+    "DL_ZS_FY": 4
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "发病情况",
+   "bindings": {
+    "field1": 10,
+    "XBS": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "健康状况",
+   "bindings": {
+    "JWS": 11,
+    "field82": 2,
+    "field16": 4
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "性质",
+   "bindings": {
+    "A01.03": 13,
+    "DL_XBS_FY": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "吸烟史",
+   "bindings": {
+    "field40": 2,
+    "field1": 10,
+    "A01.06": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "部位",
+   "bindings": {
+    "A01.03": 13
+   },
+   "dropdown": true,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "专科情况",
+   "bindings": {
+    "A01.17": 4,
+    "A01.23": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "姓名",
+   "bindings": {
+    "Patient": 11
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "伴随症状",
+   "bindings": {
+    "DL_XBS_FY": 5,
+    "A01.04": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "过敏史",
+   "bindings": {
+    "JWS": 10
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "预防接种史",
+   "bindings": {
+    "JWS": 10
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "发病时间",
+   "bindings": {
+    "field1": 10
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "冶游史",
+   "bindings": {
+    "field40": 10
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "家族史",
+   "bindings": {
+    "field16": 10
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "老中青",
+   "bindings": {
+    "B01.01.01": 10
+   },
+   "dropdown": true,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "腹部",
+   "bindings": {
+    "A01.23": 9
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "口唇",
+   "bindings": {
+    "field25": 8
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "胸廓",
+   "bindings": {
+    "field25": 8
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "性别",
+   "bindings": {
+    "Patient": 7,
+    "B01.01.01": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "诱因",
+   "bindings": {
+    "A01.04": 5,
+    "DL_XBS_FY": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "既往史",
+   "bindings": {
+    "JWS": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "一般健康状况标志",
+   "bindings": {
+    "JWS": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "疾病史（含外伤）",
+   "bindings": {
+    "JWS": 7
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "直肠肛门",
+   "bindings": {
+    "field25": 7
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "双侧",
+   "bindings": {
+    "A01.22": 1,
+    "field149": 6
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "病史",
+   "bindings": {
+    "field1": 4,
+    "XBS": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "呼吸音",
+   "bindings": {
+    "field25": 6
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "心律",
+   "bindings": {
+    "field25": 6
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "病史陈述者",
+   "bindings": {
+    "A01.02": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "现病史",
+   "bindings": {
+    "field1": 4,
+    "XBS": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "发病以来一般情况",
+   "bindings": {
+    "DL_XBS_FY": 4,
+    "A01.04": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "精神状态",
+   "bindings": {
+    "DL_XBS_FY": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "食欲",
+   "bindings": {
+    "DL_XBS_FY": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "睡眠",
+   "bindings": {
+    "DL_XBS_FY": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "小便情况",
+   "bindings": {
+    "DL_XBS_FY": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "心血管病史",
+   "bindings": {
+    "JWS": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "其他病史",
+   "bindings": {
+    "JWS": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肝炎结核病史",
+   "bindings": {
+    "JWS": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "手术外伤输血",
+   "bindings": {
+    "JWS": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "手术外伤史",
+   "bindings": {
+    "JWS": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "个人史",
+   "bindings": {
+    "Patient": 4,
+    "A01.06": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "居住地",
+   "bindings": {
+    "Patient": 4,
+    "A01.06": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "接触史",
+   "bindings": {
+    "field40": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "疫区接触史",
+   "bindings": {
+    "field40": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "特殊地区居住史",
+   "bindings": {
+    "field40": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "有毒物质接触史",
+   "bindings": {
+    "field40": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "生活习惯、烟酒史",
+   "bindings": {
+    "field40": 2,
+    "field1": 3
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "婚育史",
+   "bindings": {
+    "field1": 2,
+    "A01.07": 3
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "有无遗传倾向疾病",
+   "bindings": {
+    "field16": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-一般状况检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "发育",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "营养",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "表情",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "面容",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体位",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "配合检查",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-皮肤和黏膜检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "色泽",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肝掌蜘蛛痣",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-全身浅表淋巴检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "全身浅表淋巴结",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-头部及其器官检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "头颅异常",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "眼睑水肿",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "结膜",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "巩膜",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "角膜",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "瞳孔",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "对光反射",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "外耳道",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "乳突",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "鼻",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "鼻窦",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "口腔粘膜",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "齿龈",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "咽部粘膜",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "扁桃体",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-颈部检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "颈部",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "颈",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "颈动脉",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "甲状腺",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "甲状腺异常",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-胸部检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-肛门指诊检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-脊柱检查结果",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "脊柱",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "入院日期",
+   "bindings": {
+    "Patient": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "出院日期",
+   "bindings": {
+    "Patient": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "年龄",
+   "bindings": {
+    "Patient": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "住院天数",
+   "bindings": {
+    "Patient": 5
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "入院情况",
+   "bindings": {
+    "A01.03": 2,
+    "DL_ZS_FY": 1,
+    "XBS": 1,
+    "field1": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "体格检查",
+   "bindings": {
+    "A01.17": 2,
+    "A01.23": 2,
+    "B01.01.04": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "诊断依据",
+   "bindings": {
+    "A01.03": 2,
+    "DL_ZS_FY": 1,
+    "A01.23": 1,
+    "field1": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "神志",
+   "bindings": {
+    "A01.17": 4,
+    "A01.04": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "肝脏",
+   "bindings": {
+    "field25": 5
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "陈述者与患者关系的代码",
+   "bindings": {
+    "A01.02": 4
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "地址",
+   "bindings": {
+    "Patient": 4
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "月经史",
+   "bindings": {
+    "A01.07": 3,
+    "field1": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "婚姻史",
+   "bindings": {
+    "field1": 2,
+    "A01.07": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "生育史",
+   "bindings": {
+    "field1": 2,
+    "A01.07": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "四肢",
+   "bindings": {
+    "ALLFOURS_EXAM_RESULT": 4
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "住院次",
+   "bindings": {
+    "Patient": 4
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "病案号",
+   "bindings": {
+    "Patient": 4
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "干湿性罗音",
+   "bindings": {
+    "A01.22": 1,
+    "field149": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "主要症状特点及其发展变化",
+   "bindings": {
+    "XBS": 3
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "发病以来诊治经过及结果",
+   "bindings": {
+    "field1": 3
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "大便情况",
+   "bindings": {
+    "A01.04": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "颈静脉",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "气管",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肝颈静脉回流征",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "胸骨叩痛",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-腹部检查结果",
+   "bindings": {
+    "field25": 2,
+    "A01.23": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "脊柱畸形",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "饮酒史",
+   "bindings": {
+    "A01.06": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "月经量",
+   "bindings": {
+    "field1": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "月经颜色",
+   "bindings": {
+    "field1": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "月经相关症状",
+   "bindings": {
+    "field1": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "呼吸运动",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "呼吸规整",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "心前区隆起",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "心包摩擦音",
+   "bindings": {
+    "field25": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "可未",
+   "bindings": {
+    "field149": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "瓣膜杂音",
+   "bindings": {
+    "field149": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "症状特点",
+   "bindings": {
+    "XBS": 3
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "一般状况",
+   "bindings": {
+    "B01.01.04": 3
+   },
+   "dropdown": true,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "婚姻史(知识库)",
+   "bindings": {
+    "field1": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "生育史(知识库)",
+   "bindings": {
+    "field1": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "子女",
+   "bindings": {
+    "field1": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "家族健康状况",
+   "bindings": {
+    "field16": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "父母",
+   "bindings": {
+    "field16": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "兄弟姐妹",
+   "bindings": {
+    "field16": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体格检查-外生殖器检查结果",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肛门生殖器",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "简要病史",
+   "bindings": {
+    "field1": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "床号",
+   "bindings": {
+    "Patient": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "入院时间",
+   "bindings": {
+    "Patient": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "上呼吸道症状",
+   "bindings": {
+    "DL_XBS_FY": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "消化道症状",
+   "bindings": {
+    "DL_XBS_FY": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "泌尿系症状",
+   "bindings": {
+    "DL_XBS_FY": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "月经史：",
+   "bindings": {
+    "field1": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "腹外形",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "腹壁静脉曲张",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "腹部紧张度",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "压痛反跳痛",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "包块",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肠鸣音",
+   "bindings": {
+    "field25": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "查房记录",
+   "bindings": {
+    "B03.01": 2
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "Padua评分",
+   "bindings": {
+    "B03.01": 2
+   },
+   "dropdown": true,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "月经史(知识库)",
+   "bindings": {
+    "field1": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "主要体征",
+   "bindings": {
+    "B01.01.04": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "出院医嘱",
+   "bindings": {
+    "G01.06": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "日常病程",
+   "bindings": {
+    "field11": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "诊疗计划",
+   "bindings": {
+    "B01.05": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "简要病情及诊疗情况",
+   "bindings": {
+    "A01.03": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "会诊意见",
+   "bindings": {
+    "A01.03": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "病史陈述者姓名",
+   "bindings": {
+    "A01.02": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "肋间隙",
+   "bindings": {
+    "A01.22": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "语颤",
+   "bindings": {
+    "A01.22": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "胸膜摩擦感",
+   "bindings": {
+    "A01.22": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "叩诊",
+   "bindings": {
+    "A01.22": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "有无",
+   "bindings": {
+    "A01.22": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "随访电话",
+   "bindings": {
+    "G01.06": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "申请原因",
+   "bindings": {
+    "A01.03": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "住院病程",
+   "bindings": {
+    "field1": 1
+   },
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "起病",
+   "bindings": {
+    "B01.01.03": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "护理级别",
+   "bindings": {
+    "B01.05": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "生址",
+   "bindings": {
+    "A01.06": 1
+   },
+   "dropdown": true,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "记录时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体重",
+   "bindings": {},
+   "dropdown": true,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "与本次疾病无紧密关系的其他疾病情况",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "体征",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "体温",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "脉搏",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "呼吸",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "收缩压",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "舒张压",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "体格检查-神经系统检查结果",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录"
+   ]
+  },
+  {
+   "label": "辅助检查结果",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "出院记录"
+   ]
+  },
+  {
+   "label": "初步诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "入院记录",
+    "病程记录",
+    "知情文件"
+   ]
+  },
+  {
+   "label": "签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录",
+    "入院记录",
+    "出院记录",
+    "手术记录",
+    "用药记录",
+    "病程记录",
+    "知情文件"
+   ]
+  },
+  {
+   "label": "入院诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "诊疗经过",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "日期",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "出院诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "出院情况",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  },
+  {
+   "label": "手术日期",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "手术开始时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "手术结束时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "术前诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "术中诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "麻醉方法",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "手术者姓名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "I助姓名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "手术经过",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "手术记录"
+   ]
+  },
+  {
+   "label": "上级医师签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "书写医师签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "讨论时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "术者签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录",
+    "知情文件"
+   ]
+  },
+  {
+   "label": "经治医师签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录",
+    "知情文件"
+   ]
+  },
+  {
+   "label": "病程记录",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "既往身体状况描述",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "辅助检查",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录",
+    "病程记录"
+   ]
+  },
+  {
+   "label": "鉴别诊断",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "医师签名时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "“我同意”或“我不同意”",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "患者签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "近亲属签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "与患者关系",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "患者签名时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "“自行处置”或“由医院处置”",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "授权的负责人签名：",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "签字时间：",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "行手术方式",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "拟行麻醉方式",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "yljgfzr",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "知情文件"
+   ]
+  },
+  {
+   "label": "会诊类型",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "申请会诊的理由和目的",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "邀请科室",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "申请科室",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "申请医师",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "发出申请时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "会诊科室",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "会诊时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "急会诊到达时间",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "会诊记录"
+   ]
+  },
+  {
+   "label": "执行项目",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "未执行项目",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "主持人签名",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "病情变化，症状、体征的变化，有无新的症状与体征出现，分析发生变化的原因，有无并发症及其发生的可能原因",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "描述",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "处理意见：采取的诊疗措施及效果，诊治工作的进展情况",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "病程记录"
+   ]
+  },
+  {
+   "label": "病情变化",
+   "bindings": {},
+   "dropdown": false,
+   "docTypes": [
+    "出院记录"
+   ]
+  }
+ ]
+}

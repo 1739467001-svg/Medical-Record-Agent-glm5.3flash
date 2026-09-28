@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 病历智能体 · 医生工作台（演示）</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e6b63'/%3E%3Cpath d='M10 16h12M16 10v12' stroke='%23f6f7f4' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">十</div>
+    <div class="brand-text">
+      <div class="brand-title">东阿县人民医院 · AI 病历智能体</div>
+      <div class="brand-sub">住院病历书写工作台 <span class="demo-badge">演示版 v0.1</span></div>
+    </div>
+  </div>
+  <nav class="topnav">
+    <a href="#/workbench" data-nav>工作台</a>
+    <a href="#/about" data-nav>说明</a>
+  </nav>
+  <div class="topbar-right">
+    <div class="user-chip"><span class="avatar">普</span><div><b>王医生</b><i>普外科 · 住院医师</i></div></div>
+  </div>
+</header>
+<main id="app"></main>
+<footer class="foot">
+  <span>本页面为项目演示环境 · 全部患者数据已脱敏（患者A / 患者B） · <a href="#/fieldmap" style="color:var(--primary);text-decoration:none">字段地图（研发 / 院方确认工具，非医生功能）</a></span>
+  <span>AI 生成内容仅为草稿，须经医生确认后方可归档 · 责任主体：医生</span>
+</footer>
+<div id="modal-root"></div>
+<script src="js/app.js"></script>
+</body>
+</html>
