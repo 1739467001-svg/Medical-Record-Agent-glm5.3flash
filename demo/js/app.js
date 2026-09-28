@@ -205,8 +205,9 @@ function admissionTimeline(p, a, i){
         <div class="tl-head">
           <span class="tl-disease">第 ${i + 1} 次 · ${esc(a.disease || "住院记录")}</span>
           <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">VISIT_ID ${a.visit_id ?? "—"}</span>
-          ${p.code === "DA0001" ? `<button class="btn primary" style="margin-left:auto" onclick="location.hash='#/adm/${p.code}/${i + 1}'">进入住院工作区 →</button>`
-            : `<span style="margin-left:auto;font-size:11.5px;color:var(--ink-3)">只读视图 · 点击文书查看</span>`}
+          <button class="btn" style="margin-left:auto" onclick="event.stopPropagation();showAISummary('${p.code}',${i + 1})">⚡ AI 病例总结</button>
+          ${p.code === "DA0001" ? `<button class="btn primary" onclick="location.hash='#/adm/${p.code}/${i + 1}'">进入住院工作区 →</button>`
+            : `<span style="font-size:11.5px;color:var(--ink-3)">只读视图 · 点击文书查看</span>`}
         </div>
         <div class="doc-chips">
           ${Object.entries(typeCount).map(([t, n]) => `<span class="doc-chip"><b>${n}</b> ${t}</span>`).join("")}
@@ -794,3 +795,57 @@ function viewAbout(){
   await loadData();
   route();
 })();
+
+/* ---------------- AI 病例总结（服务端 LLM 实时生成） ---------------- */
+function showAISummary(code, idx){
+  const adm = getAdm(code, idx);
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-mask" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <div class="modal-head"><span class="t">⚡ AI 病例总结 · ${esc(getPatient(code).display)} 第 ${idx} 次住院</span>
+          <span class="tag" style="background:var(--primary-soft);color:var(--primary-deep)">DeepSeek 实时生成 · 已脱敏数据</span>
+          <span class="x" onclick="closeModal()">✕</span></div>
+        <div class="modal-body" id="ai-sum-body">
+          <div style="text-align:center;padding:46px 0;color:var(--ink-3);font-size:13px">
+            <div class="wave on" style="height:26px">${"<i></i>".repeat(16)}</div>
+            <div style="margin-top:10px">AI 正在阅读该次住院的文书流、医嘱、检验与检查报告…</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  fetch("api/generate-summary", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, admission: idx }) })
+    .then(r => r.json().then(d => ({ ok: r.ok, d })))
+    .then(({ ok, d }) => {
+      const body = document.getElementById("ai-sum-body");
+      if (!body) return;
+      if (!ok || d.error){
+        body.innerHTML = `<div class="notice" style="margin:10px 0 0">⚠ ${esc(d.error || "服务暂不可用")}</div>
+          <p style="font-size:12.5px;color:var(--ink-3);line-height:1.8">注：AI 实时生成需云端部署环境（本地静态打开时不可用）。线上访问地址：http://60.205.204.162/mra/</p>`;
+        return;
+      }
+      const html = d.summary.split(/\n/).filter(l => l.trim()).map(l =>
+        l.trim().startsWith("1.") || l.trim().startsWith("2.") || l.trim().startsWith("3.") ||
+        l.trim().startsWith("4.") || l.trim().startsWith("5.")
+          ? `<p style="margin:10px 0 4px;font-weight:700;color:var(--primary-deep)">${esc(l.trim())}</p>`
+          : `<p style="margin:0 0 6px;line-height:1.9">${esc(l.trim())}</p>`).join("");
+      body.innerHTML = `<div class="md-title" style="font-size:14.5px">生成时间 ${esc(d.generated_at)} · AI 草稿仅供参考，须经医生核对</div>
+        <div style="font-size:13.5px">${html}</div>
+        <div style="margin-top:14px;display:flex;gap:8px">
+          <button class="btn" onclick="copyAISummary()">复制文本</button>
+        </div>
+        <textarea id="ai-sum-raw" style="position:absolute;left:-9999px">${esc(d.summary)}</textarea>`;
+    })
+    .catch(() => {
+      const body = document.getElementById("ai-sum-body");
+      if (body) body.innerHTML = `<div class="notice" style="margin:10px 0 0">⚠ 无法连接 AI 服务（本地静态环境无此接口）。请访问线上部署：http://60.205.204.162/mra/</div>`;
+    });
+}
+function copyAISummary(){
+  const ta = document.getElementById("ai-sum-raw");
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(() => {
+    alert("已复制到剪贴板");
+  });
+}
