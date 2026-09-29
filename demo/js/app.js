@@ -276,9 +276,11 @@ function closeModal(){ document.getElementById("modal-root").innerHTML = ""; }
 /* ================================================================ */
 function flowState(key){
   if (!S.flow[key]){
-    try { S.flow[key] = JSON.parse(localStorage.getItem("mra_flow_" + key)) || null; } catch (e) {}
-    if (!S.flow[key] || typeof S.flow[key] !== "object")
-      S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false, filter: "all" };
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("mra_flow_" + key)); } catch (e) {}
+    // 以默认结构打底合并，旧版本/不完整存档缺字段时不致渲染报错
+    S.flow[key] = { step: 1, revealed: 0, transcriptDone: false, agentN: 0, edits: {}, editLog: [], archived: false, filter: "all",
+                    ...(saved && typeof saved === "object" ? saved : {}) };
   }
   return S.flow[key];
 }
@@ -620,7 +622,7 @@ function renderStepConfirm(body, key, adm){
       <div class="cs-item clickable" onclick="toggleAllSections(true)">展开全部</div>
       <div class="cs-item clickable" onclick="toggleAllSections(false)">收起全部</div>
       ${Object.entries(COLOR_META).map(([k, m]) => `<div class="cs-item clickable" onclick="jumpToColor('${k}')"><span class="dot ${m.dot}"></span>${m.name}<b>${cCount[k]}</b></div>`).join("")}
-      <div class="cs-item" style="color:var(--yellow);border-color:#ecd9ae;background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组取值冲突 · 点颜色定位字段</div>
+      <div class="cs-item" style="color:var(--yellow);border-color:var(--yellow-line);background:var(--yellow-bg)">⚠ ${conflictLabels.size} 组取值冲突 · 点颜色定位字段</div>
     </div>
     <div id="sec-list">
     ${sections.map(sec => {
