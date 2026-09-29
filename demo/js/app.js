@@ -462,28 +462,15 @@ const AGENTS = [
   { icon: "🛡", name: "质控校验智能体" },
   { icon: "🧩", name: "字段映射智能体" },
 ];
+const AGENT_KEYS = ["extractor", "aggregator", "retriever", "writer", "qc", "mapper"];
 function renderStepGenerate(body, key, adm){
-  const p = getPatient("DA0001");
-  const admRec = p.admissions[0];
-  const admissionDoc = admRec.docs.find(d => d.type === "入院记录");
-  const fields = admissionDoc.fields;
-  const labeled = fields.filter(f => f.label);
-  const cCount = { blue: 0, green: 0, gray: 0, yellow: 0 };
-  labeled.forEach(f => cCount[colorOf(f)]++);
-  // 质控：同名字段取值冲突
-  const byLabel = {};
-  labeled.forEach(f => { (byLabel[f.label] = byLabel[f.label] || []).push(String(f.value).trim()); });
-  const conflicts = Object.entries(byLabel).filter(([l, vs]) => new Set(vs.filter(v => v)).size > 1).length;
-  const his = admRec.his || {};
-  const outs = [
-    `从转写稿抽取 ${new Set(S.dialogue.flatMap(t => t.mapsTo)).size} 类医学要素：主诉、现病史、既往史、个人史、婚育史、家族史…每项携带对话出处`,
-    `HIS 拉取（VISIT_ID 过滤）：异常检验 ${(his.abnormal_labs || []).length} 项 · 检查报告 ${(his.exams || []).length} 份 · 医嘱 ${(his.orders || []).length} 条 · 生命体征 ${(his.vitals || []).length} 类`,
-    `命中本院同类病历 12 份（急性阑尾炎）· 《急性阑尾炎诊疗规范》· 本院写作风格样本 61 份`,
-    `按入院记录模板生成 ${labeled.length} 个字段：绿 ${cCount.green}（对话提炼）· 蓝 ${cCount.blue}（系统带入）· 灰 ${cCount.gray}（规范所见）· 黄 ${cCount.yellow}（待补）`,
-    conflicts ? `发现 ${conflicts} 组同名字段取值冲突（如"过敏史"），已标注 ⚠ 请医生裁定；无臆造项，缺失字段一律留空` : `完整性 / 逻辑一致性 / 受控词表校验通过；无臆造项，缺失字段一律留空（黄色）`,
-    `${labeled.length} 个内容已映射至 XTextDocument 模板节点（含受控下拉 ${labeled.filter(f => f.dropdown).length} 项），生成可归档数据包`,
-  ];
+  const st = flowState(key);
+  if (st.agentResult){                    // 已有真草稿（重进页面直接显示）
+    renderAgentResult(body, key, st.agentResult);
+    return;
+  }
   body.innerHTML = `
+    <div class="notice">⚡ <b>真实多智能体生成</b>&nbsp;六个智能体正按流水线真实运行（DeepSeek 驱动，每个字段带来源与依据）；约 15~40 秒。无录音模式下绿字段有限——这正是录音补采的意义。</div>
     <div class="gen-progress"><i id="gen-bar"></i></div>
     <div class="ag-grid">
       ${AGENTS.map((a, i) => `
@@ -495,40 +482,116 @@ function renderStepGenerate(body, key, adm){
         </div>`).join("")}
     </div>
     <div class="gen-done-cta" id="gen-done"></div>`;
-  let i = 0;
-  const total = AGENTS.length;
-  const run = () => {
-    if (i >= total){
-      document.getElementById("gen-bar").style.width = "100%";
-      document.getElementById("gen-done").innerHTML = `
-        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
-          <button class="btn primary big" id="to-confirm">进入四色确认 →</button>
-          <button class="btn big" id="regen">↻ 重新生成</button>
-        </div>`;
-      document.getElementById("regen").onclick = () => { const b = document.getElementById("step-body"); renderStepGenerate(b, "DA0001_1", getAdm("DA0001", 1)); };
-      document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
-      return;
+  // 流式消费 NDJSON
+  fetch("api/generate-draft", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: "DA0001", admission: 1 }) })
+    .then(resp => {
+      const reader = resp.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      const pump = () => reader.read().then(({ done, value }) => {
+        if (done) return;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0){
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { handleAgentEvent(JSON.parse(line), key); } catch (e) {}
+        }
+        return pump();
+      });
+      return pump();
+    })
+    .catch(() => {
+      const done = document.getElementById("gen-done");
+      if (done) done.innerHTML = `<div class="notice">⚠ 无法连接 AI 服务（本地静态环境无此接口）。请访问线上部署：http://60.205.204.162/mra/</div>`;
+    });
+}
+function handleAgentEvent(ev, key){
+  if (ev.event === "agent_start"){
+    const i = AGENT_KEYS.indexOf(ev.agent);
+    if (i >= 0){
+      const card = document.getElementById(`ag-${i}`);
+      if (card){ card.classList.add("run"); document.getElementById(`ag-st-${i}`).textContent = "运行中…"; }
+      const bar = document.getElementById("gen-bar");
+      if (bar) bar.style.width = `${Math.round((i / AGENT_KEYS.length) * 100)}%`;
     }
-    const card = document.getElementById(`ag-${i}`);
-    card.classList.add("run");
-    document.getElementById(`ag-st-${i}`).textContent = "运行中…";
-    document.getElementById("gen-bar").style.width = `${Math.round(((i + 0.5) / total) * 100)}%`;
-    S.timers.push(setTimeout(() => {
-      card.classList.remove("run"); card.classList.add("ok");
-      document.getElementById(`ag-st-${i}`).textContent = "✓ 完成";
-      document.getElementById(`ag-out-${i}`).textContent = outs[i];
-      i++; document.getElementById("gen-bar").style.width = `${Math.round((i / total) * 100)}%`;
-      S.timers.push(setTimeout(run, 240));
-    }, 900));
+  } else if (ev.event === "agent_done"){
+    const i = AGENT_KEYS.indexOf(ev.agent);
+    if (i >= 0){
+      const card = document.getElementById(`ag-${i}`);
+      if (card){ card.classList.remove("run"); card.classList.add("ok"); }
+      const stEl = document.getElementById(`ag-st-${i}`);
+      if (stEl) stEl.textContent = `✓ ${(ev.ms / 1000).toFixed(1)}s`;
+      const out = document.getElementById(`ag-out-${i}`);
+      if (out){
+        out.textContent = ev.summary;
+        if (ev.warnings && ev.warnings.length)
+          out.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;color:var(--yellow);font-size:11px">⚠ ${esc(ev.warnings[0]).slice(0, 88)}…</div>`);
+      }
+      const bar = document.getElementById("gen-bar");
+      if (bar) bar.style.width = `${Math.round(((i + 1) / AGENT_KEYS.length) * 100)}%`;
+    }
+  } else if (ev.event === "final"){
+    const st = flowState(key);
+    st.agentResult = { fields: ev.fields, stats: ev.stats };
+    persistFlow(key);
+    renderAgentResult(document.getElementById("step-body"), key, st.agentResult);
+  } else if (ev.event === "error"){
+    const done = document.getElementById("gen-done");
+    if (done) done.innerHTML = `<div class="notice">⚠ 生成失败：${esc(ev.error)}</div>`;
+  }
+}
+function renderAgentResult(body, key, result){
+  const s = result.stats;
+  body.innerHTML = `
+    <div class="gen-progress"><i style="width:100%"></i></div>
+    <div class="ag-grid">
+      ${AGENTS.map((a, i) => {
+        const tr = (result.trace || [])[i];
+        return `<div class="card ag-card ok"><div class="bar"></div>
+          <div class="ag-icon">${a.icon}</div>
+          <div class="ag-name">${a.name}<span class="ag-status">${tr ? "✓ " + (tr.ms / 1000).toFixed(1) + "s" : "✓"}</span></div>
+          <div class="ag-out">${tr ? esc(tr.summary) : "—"}</div></div>`;
+      }).join("")}
+    </div>
+    <div class="card" style="padding:14px 20px;margin-bottom:16px">
+      <b style="font-family:var(--serif)">生成统计（真实流水线）</b>
+      <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;line-height:1.9">
+        真实草稿 ${s.passed_fields} 字段（蓝 ${s.by_source.blue} / 绿 ${s.by_source.green} / 灰 ${s.by_source.gray}）·
+        总耗时 ${(s.total_ms / 1000).toFixed(1)}s · 降级智能体：${s.degraded_agents.length ? esc(s.degraded_agents.join("、")) : "无"}
+      </div>
+    </div>
+    <div class="gen-done-cta">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+        <button class="btn primary big" id="to-confirm">进入四色确认（真草稿）→</button>
+        <button class="btn big" id="regen">↻ 重新生成</button>
+      </div>
+    </div>`;
+  document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
+  document.getElementById("regen").onclick = () => {
+    const st2 = flowState(key); st2.agentResult = null; persistFlow(key);
+    renderStepGenerate(document.getElementById("step-body"), key, getAdm("DA0001", 1));
   };
-  later(run, 300);
 }
 
 /* ---------------- Step3 四色确认 ---------------- */
+function draftToDoc(result, admRec){
+  // 真草稿 → 确认页 doc 结构（金标准 doc 作模板兜底：字段标签集与下拉信息）
+  const gold = admRec.docs.find(d => d.type === "入院记录");
+  const byLabel = {};
+  result.fields.forEach(f => byLabel[f.label] = f);
+  const fields = gold.fields.map((f, i) => {
+    const hit = f.label && byLabel[f.label];
+    return hit ? { label: f.label, value: hit.value, binding: (hit.binding === "auto" ? f.binding : hit.binding) || f.binding,
+                   dropdown: f.dropdown, _src: hit.source, _basis: hit.basis, _i: i }
+               : { ...f, _i: i, _src: null };
+  });
+  return { type: "入院记录", title: gold.title, ts: gold.ts, fields, _real: true };
+}
 function renderStepConfirm(body, key, adm){
   const st = flowState(key);
   const admRec = getPatient("DA0001").admissions[0];
-  const doc = admRec.docs.find(d => d.type === "入院记录");
+  const doc = st.agentResult ? draftToDoc(st.agentResult, admRec) : admRec.docs.find(d => d.type === "入院记录");
   const labeled = doc.fields.map((f, i) => ({ ...f, _i: i })).filter(f => f.label);
   // 冲突检测
   const byLabel = {};
@@ -612,7 +675,7 @@ function jumpToColor(color){
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 function fieldRow(f, st, conflictLabels){
-  const c = colorOf(f);
+  const c = f._src || colorOf(f);
   const fid = `${f._i}`;
   const val = st.edits[fid] !== undefined ? st.edits[fid] : f.value;
   const coded = f.dropdown && /^\d+$/.test(String(val).trim());
@@ -627,6 +690,7 @@ function fieldRow(f, st, conflictLabels){
         : `<div class="vv" id="fv-${fid}">${esc(val)}</div>`}
       <div id="edit-zone-${fid}"></div>
       <div id="src-${fid}"></div>
+      ${f._basis ? `<div style="margin-top:5px;font-size:11px;color:var(--ink-3)">📎 依据：${esc(f._basis)}</div>` : ""}
       ${conflictLabels.has(f.label) ? `<div style="margin-top:6px;font-size:11.5px;color:var(--yellow)">⚠ 质控提示：模板内同名字段存在不同取值（嵌套模板分支），请医生裁定保留哪项</div>` : ""}
     </div>
     <div class="ops">

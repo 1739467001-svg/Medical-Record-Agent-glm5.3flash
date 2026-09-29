@@ -217,6 +217,10 @@ def main(base_dir, generator="rules", types=("入院记录", "出院记录", "�
         import generate_llm
         gen_fn = generate_llm.generate
         gen_name = "LLM 版 v1（规则打底 + DeepSeek 归纳 + 模板常规）"
+    elif generator == "multiagent":
+        import generate_multiagent
+        gen_fn = generate_multiagent.generate
+        gen_name = "多智能体 v1（六智能体流水线：extractor/aggregator/retriever/writer/qc/mapper，模式 " + os.environ.get("MULTIAGENT_MODE", "A") + "）"
     else:
         gen_fn = generate_v0
         gen_name = "规则版 v0（仅 HIS 结构化数据，无录音、无 LLM）"
@@ -282,7 +286,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("base", nargs="?", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "病历资料", "住院"))
-    ap.add_argument("--generator", choices=["rules", "llm"], default="rules")
+    ap.add_argument("--generator", choices=["rules", "llm", "multiagent"], default="rules")
     ap.add_argument("--types", default="入院记录,出院记录,首次病程记录")
     a = ap.parse_args()
     main(a.base, generator=a.generator, types=tuple(t for t in a.types.split(",") if t))

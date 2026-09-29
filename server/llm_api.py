@@ -10,8 +10,11 @@ AI 病历智能体 · 服务端 LLM API（Demo 用）
   - 进程内限流（默认 6 次/分钟/IP）
 运行：python3 llm_api.py（端口 8090，仅 127.0.0.1 经 nginx /mra/api/ 反代暴露）
 """
-import json, os, time, urllib.request, collections
+import json, os, sys, time, urllib.request, collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agents import run_pipeline, aggregator  # noqa: E402
 
 DATA_PATH = os.environ.get("MRA_DATA_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "data", "patients.json"))
 PORT = int(os.environ.get("MRA_LLM_PORT", "8090"))
@@ -74,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/generate-summary":
+        if self.path not in ("/generate-summary", "/generate-draft"):
             return self._json(404, {"error": "not found"})
         now = time.time()
         while _hits and now - _hits[0] > RATE_WINDOW: _hits.popleft()
@@ -85,13 +88,73 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(503, {"error": "LLM 服务未配置"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            prompt, err = build_prompt(str(body.get("code", "")), int(body.get("admission", 0) or 0))
-            if err: return self._json(400, {"error": err})
-            summary = call_llm(prompt)
-            return self._json(200, {"code": body.get("code"), "admission": body.get("admission"),
-                                    "summary": summary, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
         except Exception as e:
-            return self._json(500, {"error": f"生成失败: {e}"})
+            return self._json(400, {"error": f"请求体解析失败: {e}"})
+        if self.path == "/generate-summary":
+            try:
+                prompt, err = build_prompt(str(body.get("code", "")), int(body.get("admission", 0) or 0))
+                if err: return self._json(400, {"error": err})
+                summary = call_llm(prompt)
+                return self._json(200, {"code": body.get("code"), "admission": body.get("admission"),
+                                        "summary": summary, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            except Exception as e:
+                return self._json(500, {"error": f"生成失败: {e}"})
+        return self._stream_draft(body)
+
+    # ---- 多智能体草稿（NDJSON 流式：每行一个 JSON 事件） ----
+    def _stream_draft(self, body):
+        code, adm_idx = str(body.get("code", "")), int(body.get("admission", 0) or 0)
+        transcript = body.get("transcript") or None
+        p = next((x for x in _patients if x["code"] == code), None)
+        adm = p["admissions"][adm_idx - 1] if p and 0 < adm_idx <= len(p["admissions"]) else None
+        if not adm:
+            return self._json(400, {"error": "患者或住院次不存在"})
+        doc = next((d for d in adm["docs"] if d["type"] == "入院记录"), None)
+        target_labels = {f.get("label") for f in doc["fields"]} if doc else None
+        dataset_adm = {"his": adm.get("his") or {}, "docs": adm["docs"]}
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+        def emit(obj):
+            try:
+                self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
+                self.wfile.flush()
+            except Exception:
+                raise ConnectionError("client closed")
+
+        def on_step(agent, status, tr, partial):
+            if status == "run":
+                emit({"event": "agent_start", "agent": agent})
+            elif status == "done" and tr:
+                emit({"event": "agent_done", "agent": agent, "summary": tr["summary"],
+                      "ms": tr["ms"], "warnings": tr["warnings"]})
+        try:
+            result = run_pipeline(transcript=transcript,
+                                  patients_admission=dataset_adm,
+                                  corpus=build_corpus(code, adm_idx),
+                                  doc_type="入院记录",
+                                  target_labels=target_labels,
+                                  on_step=on_step)
+            emit({"event": "final", "fields": result["fields"],
+                  "stats": result["stats"], "trace": result["trace"]})
+        except ConnectionError:
+            pass
+        except Exception as e:
+            try: emit({"event": "error", "error": str(e)})
+            except Exception: pass
+
+def build_corpus(code, adm_idx):
+    """知识检索语料：该患者其余住院次 + 另一患者的文书（全部脱敏数据）。"""
+    docs = []
+    for p in _patients:
+        for a in p["admissions"]:
+            if p["code"] == code and a is not None:
+                docs += a["docs"]
+    from agents import retriever
+    return retriever.build_corpus_from_fields(docs)
 
 if __name__ == "__main__":
     print(f"[llm-api] listening 0.0.0.0:{PORT}, data={DATA_PATH}")
