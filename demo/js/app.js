@@ -9,6 +9,7 @@ const S = {
   patients: [], dialogue: [], fieldmap: null,
   flow: {},          // flowKey -> {step, revealed, transcriptDone, agentN, edits:{}, archived:false}
   timers: [],
+  user: null,        // 当前登录用户（api/auth/me 返回）；null = 未登录
 };
 
 /* ---------------- 工具 ---------------- */
@@ -83,6 +84,7 @@ function route(){
   window.scrollTo(0, 0);
   if (view === "patient" && a) return viewPatient(a);
   if (view === "adm" && a && b) return viewAdmission(a, +b);
+  if (view === "login" || view === "register") return viewAuth(view);
   if (view === "fieldmap") return viewFieldmap();
   if (view === "manual") return viewManual();
   if (view === "about") return viewAbout();
@@ -107,11 +109,11 @@ function viewWorkbench(){
   $app.innerHTML = `
     <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者已脱敏（患者A / 患者B），数据源自院方提供的真实住院病历（金标准）；"录音转写"为按真实入院记录重构的模拟对话，"AI 生成"内容取自金标准文书以演示确认流程。正式环境中草稿由多智能体实时生成。</div>
     <div class="page-head">
-      <div class="page-title">工作台<small>王医生 · 普外科 · 演示数据集</small></div>
-      <div style="display:flex;gap:8px"><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
+      <div class="page-title">工作台<small>${S.user ? esc(S.user.name) + (S.user.department ? " · " + esc(S.user.department) : "") : "王医生"} · 演示数据集</small></div>
+      <div style="display:flex;gap:8px"><button class="btn" onclick="startTour(true)">▶ 新手引导</button><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
     </div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default">今日书写任务</div>
-    <div class="task-list">
+    <div class="task-list" id="tour-tasks">
       <div class="card task-row t-warn">
         <div class="t-icon">🖊</div>
         <div class="t-main">
@@ -144,14 +146,14 @@ function viewWorkbench(){
         </div>
       </div>
     </div>
-    <div class="stat-row">
+    <div class="stat-row" id="tour-stats">
       <div class="card stat"><span class="num">${S.patients.length}</span><span class="lab">在院患者（脱敏）</span></div>
       <div class="card stat b"><span class="num">${totalAdm}</span><span class="lab">住院记录</span><span class="sub">2023-11 ~ 2026-09</span></div>
       <div class="card stat g"><span class="num">${totalDocs}</span><span class="lab">累计病历文书</span><span class="sub">入院 / 病程 / 手术 / 出院 等</span></div>
       <div class="card stat y"><span class="num">1</span><span class="lab">待确认草稿</span><span class="sub">患者A · 入院记录</span></div>
     </div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default;margin-bottom:12px">我的患者</div>
-    <div class="pt-grid">
+    <div class="pt-grid" id="tour-patients">
       ${S.patients.map((p, pi) => `
         <div class="card pt-card" onclick="location.hash='#/patient/${p.code}'">
           <div class="pt-top">
@@ -935,10 +937,148 @@ function viewAbout(){
   </div>`;
 }
 
+/* ================================================================
+   登录 / 注册 + 顶栏用户区 + 新手引导（首次登录自动播放）
+   ================================================================ */
+const DEMO_USER_KEY = "mra_demo_user";
+const TOUR_KEY_DEMO = "mra_tour_demo";
+
+function tourSteps(){
+  return [
+    { sel: "#tour-tasks", title: "① 今日书写任务", body: "AI 已按<b>六智能体流水线</b>生成入院记录草稿。点右侧「继续核对」进入逐字段核对；<b>法定时限倒计时</b>就在这一行——入院记录 24h 内必须完成。" },
+    { sel: "#tour-patients", title: "② 我的患者 · 开始问诊", body: "点击患者卡片查看住院全景与历史文书。新患者从「▶ 开始入院问诊」进入：<b>问诊录音 → AI 生成草稿 → 四色确认 → 归档</b>，四步完成一份病历。" },
+    { sel: "#tour-stats", title: "③ 工作量总览", body: "在院患者、住院记录、累计文书、待确认草稿一目了然，方便交班与自查。" },
+    { sel: ".topnav", title: "④ 帮助与状态", body: "「手册」是医生操作手册，「说明」讲清系统能力边界（AI 只出草稿，医生确认后归档）。右上角圆点是 <b>AI 服务状态灯</b>——绿色表示在线。" },
+    { sel: "#user-area", title: "⑤ 账号与引导",
+      body: S.user && !S.user.demo
+        ? "这里显示你的登录身份，可随时退出。本引导可从工作台右上角「▶ 新手引导」随时重看。"
+        : "登录后你的身份会显示在这里；<b>首次登录会自动播放本引导</b>。现在点「下一步」完成引导，然后可点右上角「登录 / 注册」创建账号。" },
+  ];
+}
+function demoUser(){
+  try { return JSON.parse(localStorage.getItem(DEMO_USER_KEY)); } catch (e) { return null; }
+}
+function renderUserArea(){
+  const el = document.getElementById("user-area");
+  if (!el) return;
+  if (S.user){
+    const u = S.user;
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:10px">
+      <div class="user-chip"><span class="avatar">${esc((u.name || u.username || "医").slice(0, 1))}</span><div><b>${esc(u.name || u.username)}</b><i>${esc(u.department || "")}${u.title ? " · " + esc(u.title) : ""}</i></div></div>
+      <button class="btn ghost" style="color:rgba(238,247,250,.85);border-color:rgba(238,247,250,.35);padding:6px 12px" onclick="doLogout()">退出</button></div>`;
+  } else {
+    el.innerHTML = `<button class="btn primary" style="padding:7px 16px" onclick="location.hash='#/login'">登录 / 注册</button>`;
+  }
+}
+async function authPost(path, data){
+  const r = await fetch("api" + path, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+  const d = await r.json().catch(() => ({}));
+  return { ok: r.ok, d };
+}
+function viewAuth(mode){
+  const isReg = mode === "register";
+  document.querySelectorAll("[data-nav]").forEach(n => n.classList.remove("active"));
+  $app.innerHTML = `
+    <div class="auth-wrap">
+      <div class="card auth-card">
+        <div class="auth-brand"><div class="brand-mark">十</div>
+          <div><div class="auth-h1">${isReg ? "注册医生账号" : "医生登录"}</div><div class="auth-sub">东阿县人民医院 · AI 病历智能体</div></div></div>
+        <div class="auth-tabs">
+          <a class="${isReg ? "" : "on"}" href="#/login">登 录</a>
+          <a class="${isReg ? "on" : ""}" href="#/register">注 册</a>
+        </div>
+        <div id="auth-err" class="auth-err" style="display:none"></div>
+        ${isReg ? `
+        <label class="auth-lab">姓名<input id="au-name" maxlength="32" placeholder="真实姓名（病案签章用）"></label>
+        <div class="auth-row">
+          <label class="auth-lab">科室<select id="au-dept"><option>普外科</option><option>内科</option><option>外科</option><option>妇产科</option><option>儿科</option><option>急诊科</option><option>其他</option></select></label>
+          <label class="auth-lab">职称<select id="au-title"><option>住院医师</option><option>主治医师</option><option>副主任医师</option><option>主任医师</option><option>护士</option><option>其他</option></select></label>
+        </div>` : ""}
+        <label class="auth-lab">用户名（工号 / 手机号）<input id="au-user" maxlength="32" placeholder="3~32 位字母、数字或下划线"></label>
+        <label class="auth-lab">密码<input id="au-pwd" type="password" maxlength="64" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')submitAuth('${isReg ? "register" : "login"}')"></label>
+        ${isReg ? `<label class="auth-lab">确认密码<input id="au-pwd2" type="password" maxlength="64" onkeydown="if(event.key==='Enter')submitAuth('register')"></label>` : ""}
+        <button class="btn primary big" style="width:100%;justify-content:center;margin-top:6px" onclick="submitAuth('${isReg ? "register" : "login"}')">${isReg ? "注册并进入" : "登 录"}</button>
+        <div class="auth-foot">
+          <a href="#" onclick="enterDemo();return false">先逛逛，进入演示模式 →</a>
+          <span>${isReg ? "已有账号？" : "没有账号？"}<a href="${isReg ? "#/login" : "#/register"}">${isReg ? "去登录" : "立即注册"}</a></span>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => { const el = document.getElementById("au-user"); if (el) el.focus(); }, 60);
+}
+function authError(msg){
+  const el = document.getElementById("auth-err");
+  if (el){ el.textContent = "⚠ " + msg; el.style.display = "block"; }
+}
+async function submitAuth(mode){
+  const err = document.getElementById("auth-err");
+  if (err) err.style.display = "none";
+  const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+  const username = val("au-user"), password = document.getElementById("au-pwd")?.value || "";
+  if (mode === "register"){
+    const name = val("au-name"), department = val("au-dept"), title = val("au-title");
+    const pwd2 = document.getElementById("au-pwd2")?.value || "";
+    if (password !== pwd2) return authError("两次输入的密码不一致");
+    const { ok, d } = await authPost("/auth/register", { username, password, name, department, title });
+    if (!ok) return authError(d.error || "注册失败，请稍后再试");
+    S.user = d.user;
+    afterAuth(true);
+  } else {
+    const { ok, d } = await authPost("/auth/login", { username, password });
+    if (!ok) return authError(d.error || "登录失败，请稍后再试");
+    S.user = d.user;
+    afterAuth(false);
+  }
+}
+function afterAuth(isNew){
+  localStorage.removeItem(DEMO_USER_KEY);
+  renderUserArea();
+  location.hash = "#/workbench";
+  if (isNew || !S.user.tour_done) setTimeout(maybeTour, 400);
+}
+async function doLogout(){
+  try { await fetch("api/auth/logout", { method: "POST" }); } catch (e) {}
+  S.user = null;
+  renderUserArea();
+  location.hash = "#/login";
+}
+function enterDemo(){
+  localStorage.setItem(DEMO_USER_KEY, JSON.stringify({ name: "王医生", department: "普外科", title: "住院医师", demo: true }));
+  S.user = demoUser();
+  renderUserArea();
+  location.hash = "#/workbench";
+  setTimeout(maybeTour, 400);
+}
+function tourKey(){ return S.user && !S.user.demo ? "mra_tour_" + (S.user.username || "") : TOUR_KEY_DEMO; }
+function maybeTour(){
+  if (document.getElementById("tour-root")) return;
+  if (S.user && S.user.demo){ if (localStorage.getItem(TOUR_KEY_DEMO) === "1") return; }
+  else if (S.user && S.user.tour_done) return;
+  Tour.start(tourSteps(), markTourDone);
+}
+function markTourDone(){
+  localStorage.setItem(tourKey(), "1");
+  if (S.user && !S.user.demo) fetch("api/auth/tour-done", { method: "POST" }).catch(() => {});
+}
+function startTour(replay){
+  if (replay) localStorage.setItem(tourKey(), "0");
+  Tour.start(tourSteps(), markTourDone);
+}
+
 /* ---------------- 启动 ---------------- */
 (async function init(){
   await loadData();
+  S.user = demoUser();          // 先按演示身份渲染，避免登录态闪变
+  renderUserArea();
   route();
+  // 会话恢复：服务端会话优先于演示身份；随后按需自动播放新手引导
+  try {
+    const r = await fetch("api/auth/me");
+    if (r.ok){ const d = await r.json(); if (d && d.user){ S.user = d.user; renderUserArea(); } }
+  } catch (e) {}
+  const h = location.hash || "#/workbench";
+  if (h === "#/" || h === "#/workbench") setTimeout(maybeTour, 700);
   // 顶栏 AI 服务状态灯（本地静态环境优雅降级为灰色）
   fetch("api/health").then(r => r.ok ? r.json() : null).then(d => {
     const el = document.getElementById("ai-status");

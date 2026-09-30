@@ -15,14 +15,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agents import run_pipeline, aggregator  # noqa: E402
+import auth  # noqa: E402  登录/注册/会话（server/auth.py）
 
 DATA_PATH = os.environ.get("MRA_DATA_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "data", "patients.json"))
 PORT = int(os.environ.get("MRA_LLM_PORT", "8090"))
 RATE_LIMIT = int(os.environ.get("MRA_RATE_LIMIT", "6"))
 RATE_WINDOW = 60
+AUTH_RATE_LIMIT = int(os.environ.get("MRA_AUTH_RATE_LIMIT", "20"))
+STATIC_DIR = os.environ.get("MRA_STATIC_DIR", "")  # 研发态静态托管；生产由 nginx 提供，勿设
+
+_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+                  ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
+                  ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 
 _patients = json.load(open(DATA_PATH, encoding="utf-8"))
 _hits = collections.deque()
+_auth_hits = collections.deque()
 
 SYSTEM = "你是医院的病案科医生，负责撰写规范、克制、专业的中文病例总结。只依据给定材料，绝不编造任何症状、诊断或数值；材料不足的地方写\"（材料未提供）\"。"
 
@@ -62,35 +70,92 @@ class Handler(BaseHTTPRequestHandler):
         sys_err = getattr(__import__("sys"), "stderr")
         print("[llm-api]", fmt % args, file=sys_err)
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, set_cookies=None):
         b = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
+        for c in (set_cookies or []):
+            self.send_header("Set-Cookie", c)
         self.end_headers()
         self.wfile.write(b)
 
+    @property
+    def cookies(self):
+        if not hasattr(self, "_cookies"):
+            self._cookies = {}
+            for part in (self.headers.get("Cookie") or "").split(";"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    self._cookies[k.strip()] = v.strip()
+        return self._cookies
+
+    def _rate_ok(self, hits, limit):
+        now = time.time()
+        while hits and now - hits[0] > RATE_WINDOW: hits.popleft()
+        if len(hits) >= limit: return False
+        hits.append(now)
+        return True
+
+    def _read_body(self):
+        try:
+            return json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        except Exception as e:
+            return {"__error__": str(e)}
+
+    def _static(self, path):
+        from urllib.parse import urlsplit, unquote
+        name = unquote(urlsplit(path).path) or "/"
+        if name == "/": name = "/index.html"
+        fp = os.path.realpath(os.path.join(STATIC_DIR, name.lstrip("/")))
+        root = os.path.realpath(STATIC_DIR)
+        if fp != root and not fp.startswith(root + os.sep):
+            return self._json(403, {"error": "forbidden"})
+        if not os.path.isfile(fp):
+            return self._json(404, {"error": "not found"})
+        with open(fp, "rb") as f: data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", _CONTENT_TYPES.get(os.path.splitext(fp)[1].lower(), "application/octet-stream"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
-        if self.path == "/health":
-            self._json(200, {"ok": True, "engine": os.environ.get("LLM_MODEL", "Deepseek-v4-flash")})
-        else:
-            self._json(404, {"error": "not found"})
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/api/"):
+            path = path[4:]  # 开发静态托管对齐生产 nginx：/mra/api/* → /*
+        if path == "/health":
+            return self._json(200, {"ok": True, "engine": os.environ.get("LLM_MODEL", "Deepseek-v4-flash"),
+                                    "auth": auth.BACKEND})
+        if path.startswith("/auth/"):
+            return auth.handle(self, {}, path)
+        if STATIC_DIR:
+            return self._static(path)
+        self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in ("/generate-summary", "/generate-draft"):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/api/"):
+            path = path[4:]  # 开发静态托管对齐生产 nginx：/mra/api/* → /*
+        if path.startswith("/auth/"):
+            if not self._rate_ok(_auth_hits, AUTH_RATE_LIMIT):
+                return self._json(429, {"error": "请求过于频繁，请稍后再试"})
+            body = self._read_body()
+            if "__error__" in body:
+                return self._json(400, {"error": f"请求体解析失败: {body['__error__']}"})
+            return auth.handle(self, body, path)
+        if path not in ("/generate-summary", "/generate-draft"):
             return self._json(404, {"error": "not found"})
-        now = time.time()
-        while _hits and now - _hits[0] > RATE_WINDOW: _hits.popleft()
-        if len(_hits) >= RATE_LIMIT:
+        if not self._rate_ok(_hits, RATE_LIMIT):
             return self._json(429, {"error": "请求过于频繁，请稍后再试"})
-        _hits.append(now)
         if not (os.environ.get("LLM_API_BASE") and os.environ.get("LLM_API_KEY")):
             return self._json(503, {"error": "LLM 服务未配置"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         except Exception as e:
             return self._json(400, {"error": f"请求体解析失败: {e}"})
-        if self.path == "/generate-summary":
+        if path == "/generate-summary":
             try:
                 prompt, err = build_prompt(str(body.get("code", "")), int(body.get("admission", 0) or 0))
                 if err: return self._json(400, {"error": err})
@@ -158,4 +223,6 @@ def build_corpus(code, adm_idx):
 
 if __name__ == "__main__":
     print(f"[llm-api] listening 0.0.0.0:{PORT}, data={DATA_PATH}")
+    print(f"[llm-api] auth backend: {auth.BACKEND}" + (f" -> {auth.MYSQL_CONF['host']}" if auth.BACKEND == "mysql" else f" (dev sqlite: {auth.SQLITE_PATH})"))
+    if STATIC_DIR: print(f"[llm-api] static serving (dev): {STATIC_DIR}")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

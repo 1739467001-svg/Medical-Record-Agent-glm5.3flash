@@ -14,6 +14,8 @@
 | 资源限制 | mem 96m（实测 ~9MiB）· cpus 0.5 · 日志 json-file 1m×3 · restart unless-stopped · 健康检查 30s |
 | LLM API 服务 | mra-llm-api 容器（python:3.12-alpine，ECR 源），**127.0.0.1:3905**→8090，公网经 `/mra/api/` 反代；密钥存 `/srv/apps/medical-record-agent/.llm_env`（chmod 600，不入 Git）；限流 6 次/分；数据源为脱敏 patients.json |
 | AI 功能 | 患者全景页「⚡ AI 病例总结」：DeepSeek-v4-flash 实时生成五节病例总结（入院主诉诊断/治疗措施/异常检验/住院经过/综合分析），AI 草稿须经医生核对 |
+| 认证服务 | 同 mra-llm-api 容器内（`server/auth.py`，`/mra/api/auth/*`）：登录/注册/会话/新手引导标记；密码 PBKDF2-HMAC-SHA256（200k 轮）+ 随机盐；会话 HttpOnly Cookie 7 天；存储 MySQL（生产）/SQLite（本地研发自动降级 `server/local_dev.db`，不入 Git） |
+| 数据库 | 生产 MySQL：连接参数存 `.llm_env`（MRA_MYSQL_HOST/PORT/USER/PASSWORD/DB，chmod 600）；表 users/sessions 启动自动建表；限流 20 次/分/IP |
 
 ## 日常操作（服务器上）
 
@@ -62,6 +64,31 @@ cd /srv/apps/medical-record-agent/repo
 rm server/llm_api.py demo/js/app.js && git pull   # pull 回的内容与手工放置的完全一致
 docker compose restart medical-record-agent llm-api
 ```
+
+### MySQL（认证数据库 · 首次部署一次性操作）
+
+```bash
+# 服务器上安装并初始化（Ubuntu 24.04）
+sudo apt install -y mysql-server && sudo systemctl enable --now mysql
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS medical_record_agent DEFAULT CHARSET utf8mb4;
+  CREATE USER IF NOT EXISTS 'mra'@'%' IDENTIFIED WITH mysql_native_password BY '<强密码>';
+  GRANT ALL PRIVILEGES ON medical_record_agent.* TO 'mra'@'%'; FLUSH PRIVILEGES;"
+# users/sessions 表由 auth.py 启动时自动建表，无需手工 DDL
+
+# 连接参数追加到 .llm_env（chmod 600，不入 Git），llm-api 容器读取
+cat >> /srv/apps/medical-record-agent/.llm_env <<EOF
+MRA_MYSQL_HOST=host.docker.internal
+MRA_MYSQL_PORT=3306
+MRA_MYSQL_USER=mra
+MRA_MYSQL_PASSWORD=<强密码>
+MRA_MYSQL_DB=medical_record_agent
+EOF
+chmod 600 /srv/apps/medical-record-agent/.llm_env
+```
+
+- 容器访问宿主 MySQL：docker-compose.yml 的 llm-api 服务需加 `extra_hosts: ["host.docker.internal:host-gateway"]`，改后 `docker compose up -d`。
+- MySQL 8 默认认证插件 caching_sha2_password 需要额外 C 依赖，故用户以 `mysql_native_password` 创建（见上）。
+- 未配置 `MRA_MYSQL_HOST` 时自动降级 SQLite（`server/local_dev.db`，仅研发用，不入 Git）。
 
 ## 边界与注意
 
