@@ -56,6 +56,8 @@ def qc(draft, dataset):
                 blocked += [(l, "LLM 复核判定不合规，已移除") for l in remove]
         except Exception as e:
             warnings.append(f"LLM 复核失败（保守放行代码层结果）：{e}")
-    report = {"blocked": blocked, "warnings": warnings,
+    report = {"blocked": [{"label": l, "reason": r} for l, r in blocked], "warnings": warnings,
               "summary": f"通过 {len(passed)} / 拦截修正 {len(blocked)} / 复核提示 {len(warnings)}"}
-    return passed, trace_step("qc", (time.time() - t0) * 1000, report["summary"], warnings)
+    tr = trace_step("qc", (time.time() - t0) * 1000, report["summary"], warnings)
+    tr["report"] = report  # 明细随 trace/stats 透出，供医生确认页前置展示
+    return passed, tr

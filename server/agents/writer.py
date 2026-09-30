@@ -50,32 +50,39 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
     t0 = time.time()
     draft = []
     warnings = []
-    # ---- 蓝：HIS 直填 ----
-    vit = dataset.get("vitals", {})
-    for src, dst in VITAL_MAP.items():
-        if dst and src in vit and dst not in [d["label"] for d in draft]:
-            if dst == "体温" or dst not in [d["label"] for d in draft]:
-                draft.append(DraftField(label=dst, value=str(vit[src]), source="blue",
-                                        basis=f"HIS 生命体征（{src}）", confidence=0.95))
-    if "血压" in vit and "/" in str(vit["血压"]):
-        hi, _, lo = str(vit["血压"]).partition("/")
-        draft += [DraftField(label="收缩压", value=hi.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95),
-                  DraftField(label="舒张压", value=lo.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95)]
-    # ---- 灰：模板常规 ----
-    for label, value in GRAY_DEFAULTS.items():
-        if target_labels is None or label in target_labels:
-            draft.append(DraftField(label=label, value=value, source="gray",
-                                    basis="模板常规所见（须医生核对）", confidence=0.8))
-    # ---- 绿/蓝：LLM 归纳生成 ----
+    is_first_course = doc_type == "首次病程记录"
+    # ---- 蓝：HIS 直填（首程为段落型文书，生命体征写入病例特点正文，不单独成字段） ----
+    if not is_first_course:
+        vit = dataset.get("vitals", {})
+        for src, dst in VITAL_MAP.items():
+            if dst and src in vit and dst not in [d["label"] for d in draft]:
+                if dst == "体温" or dst not in [d["label"] for d in draft]:
+                    draft.append(DraftField(label=dst, value=str(vit[src]), source="blue",
+                                            basis=f"HIS 生命体征（{src}）", confidence=0.95))
+        if "血压" in vit and "/" in str(vit["血压"]):
+            hi, _, lo = str(vit["血压"]).partition("/")
+            draft += [DraftField(label="收缩压", value=hi.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95),
+                      DraftField(label="舒张压", value=lo.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95)]
+    # ---- 灰：模板常规（首程无体格检查常规项，跳过） ----
+    if not is_first_course:
+        for label, value in GRAY_DEFAULTS.items():
+            if target_labels is None or label in target_labels:
+                draft.append(DraftField(label=label, value=value, source="gray",
+                                        basis="模板常规所见（须医生核对）", confidence=0.8))
+    # ---- 绿/蓝/灰：LLM 归纳生成 ----
     if llm_available():
-        messages = [
-            {"role": "system", "content":
-                "你是本院病历书写智能体。铁律：只依据给定的【对话要素】与【结构化数据】书写，材料未提及的字段一律不输出；"
-                "受控下拉字段（值域为编号）绝不猜测。语气为本院病历规范用语。输出纯 JSON。"},
-            {"role": "user", "content": (
-                f"目标文书：{doc_type}\n\n【对话要素】\n{sanitize(_elements_text(elements))[:2500]}\n\n"
-                f"【结构化数据】\n{sanitize(_dataset_text(dataset, doc_type))[:2200]}\n\n"
-                f"【写作规范要点】\n" + "\n".join("- " + k for k in knowledge) + "\n\n"
+        if is_first_course:
+            # 首程（PRD 153）：固定五小节；鉴别诊断/诊疗计划为知识辅助（灰源），医生过目核定
+            instruct = (
+                "固定输出五个小节：病例特点（人口学概括+主诉现病史要点+查体要点+辅助检查摘要）；"
+                "初步诊断（依据申请单临床诊断线索与检查印象归纳）；诊断依据（逐条对应病例特点）；"
+                "鉴别诊断（2~3 个鉴别点，结合【写作规范要点】，source 用 gray）；"
+                "诊疗计划（护理级别、检查安排、治疗措施，结合规范要点，source 用 gray）。\n"
+                "输出 JSON：{\"fields\":[{\"label\":\"病例特点|初步诊断|诊断依据|鉴别诊断|诊疗计划\","
+                "\"value\":\"完整段落\",\"source\":\"green|gray\",\"basis\":\"依据摘要\",\"confidence\":0~1}]}"
+                " value 为完整病历正文段落（不是短语）。只输出 JSON。")
+        else:
+            instruct = (
                 "从【对话要素】中逐一还原以下字段（每个要素必须被使用，不得遗漏可支撑的字段）："
                 "主诉；现病史（按 发病情况→症状特点→伴随症状→诊治经过→一般情况 组织成段）；"
                 "既往史（健康/疾病/手术外伤/过敏/接种逐项，答'无'的也写）；个人史；婚育史；家族史。\n"
@@ -83,7 +90,15 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
                 "输出 JSON：{\"fields\":[{\"label\":\"字段名\",\"value\":\"规范文本\",\"source\":\"green|blue\","
                 "\"basis\":\"依据摘要（引用要素/数据来源）\",\"confidence\":0~1}]}\n"
                 "要求：value 为完整病历正文表述（不是短语）；主诉=症状+持续时间；"
-                "要素为'无'的子项按'无××'规范表述写入对应节；没有材料支撑的字段不输出。只输出 JSON。")},
+                "要素为'无'的子项按'无××'规范表述写入对应节；没有材料支撑的字段不输出。只输出 JSON。")
+        messages = [
+            {"role": "system", "content":
+                "你是本院病历书写智能体。铁律：只依据给定的【对话要素】与【结构化数据】书写，材料未提及的字段一律不输出；"
+                "受控下拉字段（值域为编号）绝不猜测。语气为本院病历规范用语。输出纯 JSON。"},
+            {"role": "user", "content": (
+                f"目标文书：{doc_type}\n\n【对话要素】\n{sanitize(_elements_text(elements))[:2500]}\n\n"
+                f"【结构化数据】\n{sanitize(_dataset_text(dataset, doc_type))[:2200]}\n\n"
+                f"【写作规范要点】\n" + "\n".join("- " + k for k in knowledge) + "\n\n" + instruct)},
         ]
         try:
             data = llm_json(messages, max_tokens=3500)
@@ -93,8 +108,10 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
                 if re_match_coded(value):  # LLM 幻觉出纯编号 → 拦截
                     warnings.append(f"writer 输出疑似受控码被拦截：{label}")
                     continue
-                draft.append(DraftField(label=label, value=value[:600],
-                                        source="green" if f.get("source") == "green" else "blue",
+                src = f.get("source")
+                if src not in ("green", "blue", "gray"): src = "green"
+                draft.append(DraftField(label=label, value=value[:2000],
+                                        source=src,
                                         basis=str(f.get("basis", ""))[:120],
                                         confidence=float(f.get("confidence", 0.75))))
         except Exception as e:

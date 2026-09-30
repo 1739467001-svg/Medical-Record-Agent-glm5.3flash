@@ -62,9 +62,11 @@ def run_pipeline(transcript=None, his_views=None, patients_admission=None,
     mapped, tr_m = mapper.map_fields(passed, target_labels)
     trace.append(tr_m); report("mapper", "done", tr_m, partial={"fields": len(mapped)})
 
+    qc_report = next((t.get("report") for t in trace if t["agent"] == "qc" and t.get("report")), None)
     stats = {"total_ms": round((time.time() - t_start) * 1000),
              "elements": len(elements), "draft_fields": len(draft),
              "passed_fields": len(mapped),
              "by_source": {s: sum(1 for f in mapped if f["source"] == s) for s in ("blue", "green", "gray")},
-             "degraded_agents": [t["agent"] for t in trace if t["status"] in ("degraded", "skipped")]}
+             "degraded_agents": [t["agent"] for t in trace if t["status"] in ("degraded", "skipped")],
+             "qc": qc_report}
     return {"fields": mapped, "trace": trace, "stats": stats}

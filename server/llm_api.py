@@ -169,12 +169,17 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 多智能体草稿（NDJSON 流式：每行一个 JSON 事件） ----
     def _stream_draft(self, body):
         code, adm_idx = str(body.get("code", "")), int(body.get("admission", 0) or 0)
+        doc_type = str(body.get("doc") or "入院记录")  # 目标文书：入院记录 / 首次病程记录 …
         transcript = body.get("transcript") or None
         p = next((x for x in _patients if x["code"] == code), None)
         adm = p["admissions"][adm_idx - 1] if p and 0 < adm_idx <= len(p["admissions"]) else None
         if not adm:
             return self._json(400, {"error": "患者或住院次不存在"})
-        doc = next((d for d in adm["docs"] if d["type"] == "入院记录"), None)
+        # 文书定位：type 精确匹配 → 病程记录类按标题匹配（如"首次病程记录"）
+        doc = next((d for d in adm["docs"] if d["type"] == doc_type), None) \
+            or next((d for d in adm["docs"] if d["type"] == "病程记录" and doc_type in d.get("title", "")), None)
+        if not doc:
+            return self._json(400, {"error": f"该住院次无《{doc_type}》文书"})
         target_labels = {f.get("label") for f in doc["fields"]} if doc else None
         dataset_adm = {"his": adm.get("his") or {}, "docs": adm["docs"]}
 
@@ -184,6 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         def emit(obj):
+            obj["doc"] = doc_type  # 每个事件携带目标文书，前端按文书分发
             try:
                 self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
                 self.wfile.flush()
@@ -195,12 +201,12 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"event": "agent_start", "agent": agent})
             elif status == "done" and tr:
                 emit({"event": "agent_done", "agent": agent, "summary": tr["summary"],
-                      "ms": tr["ms"], "warnings": tr["warnings"]})
+                      "ms": tr["ms"], "warnings": tr.get("warnings") or []})
         try:
             result = run_pipeline(transcript=transcript,
                                   patients_admission=dataset_adm,
                                   corpus=build_corpus(code, adm_idx),
-                                  doc_type="入院记录",
+                                  doc_type=doc_type,
                                   target_labels=target_labels,
                                   on_step=on_step)
             emit({"event": "final", "fields": result["fields"],

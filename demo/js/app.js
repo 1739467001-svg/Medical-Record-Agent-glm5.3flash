@@ -467,14 +467,35 @@ const AGENTS = [
   { icon: "🧩", name: "字段映射智能体" },
 ];
 const AGENT_KEYS = ["extractor", "aggregator", "retriever", "writer", "qc", "mapper"];
+const FLOW_DOCS = ["入院记录", "首次病程记录"];
+const DOC_META = {
+  "入院记录": { sub: "160 字段 · 法定时限 24h", icon: "📋" },
+  "首次病程记录": { sub: "病例特点/诊断依据/鉴别诊断/诊疗计划 · 法定时限 8h", icon: "📝" },
+};
+// 分文书草稿缓存（兼容旧版单 agentResult 存档：视为入院记录结果）
+function getAgentResult(st, doc){
+  if (st.agentResults && st.agentResults[doc]) return st.agentResults[doc];
+  if (doc === "入院记录" && st.agentResult) return st.agentResult;
+  return null;
+}
+function setAgentResult(st, doc, res){
+  st.agentResults = st.agentResults || {};
+  st.agentResults[doc] = res;
+}
 function renderStepGenerate(body, key, adm){
   const st = flowState(key);
-  if (st.agentResult){                    // 已有真草稿（重进页面直接显示）
-    renderAgentResult(body, key, st.agentResult);
+  const curDoc = st.currentDoc || "入院记录";
+  const cached = getAgentResult(st, curDoc);
+  if (cached){                    // 已有真草稿（重进页面直接显示）
+    renderAgentResult(body, key, cached, curDoc);
     return;
   }
+  const meta = DOC_META[curDoc];
   body.innerHTML = `
-    <div class="notice">⚡ <b>真实多智能体生成</b>&nbsp;六个智能体正按流水线真实运行（DeepSeek 驱动，每个字段带来源与依据）；约 15~40 秒。无录音模式下绿字段有限——这正是录音补采的意义。</div>
+    <div class="doc-tabs">
+      ${FLOW_DOCS.map(d => `<button class="doc-tab ${d === curDoc ? "on" : ""}" onclick="setFlowDoc('${d}')">${DOC_META[d].icon} ${d}<small>${DOC_META[d].sub}</small></button>`).join("")}
+    </div>
+    <div class="notice">⚡ <b>真实多智能体生成 · ${esc(curDoc)}</b>&nbsp;六个智能体正按流水线真实运行（DeepSeek 驱动，每个字段带来源与依据）；约 15~40 秒。${curDoc === "首次病程记录" ? "鉴别诊断/诊疗计划为知识辅助（灰源），须医生核定。" : "无录音模式下绿字段有限——这正是录音补采的意义。"}</div>
     <div class="gen-progress"><i id="gen-bar"></i></div>
     <div class="ag-grid">
       ${AGENTS.map((a, i) => `
@@ -488,7 +509,7 @@ function renderStepGenerate(body, key, adm){
     <div class="gen-done-cta" id="gen-done"></div>`;
   // 流式消费 NDJSON（真实六智能体事件；服务端错误如实展示，绝不本地伪造智能体动画）
   fetch("api/generate-draft", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: "DA0001", admission: 1 }) })
+    body: JSON.stringify({ code: "DA0001", admission: 1, doc: curDoc }) })
     .then(resp => {
       if (!resp.ok){
         return resp.json().catch(() => ({})).then(d => {
@@ -516,7 +537,14 @@ function renderStepGenerate(body, key, adm){
       if (done) done.innerHTML = `<div class="notice">⚠ ${esc(msg)}。线上部署（已配置 DeepSeek）：http://60.205.204.162/mra/</div>`;
     });
 }
+function setFlowDoc(doc){
+  const st = flowState(flowKey("DA0001", 1));
+  st.currentDoc = doc; persistFlow(st.key || flowKey("DA0001", 1));
+  viewAdmission("DA0001", 1);
+}
 function handleAgentEvent(ev, key){
+  const st = flowState(key);
+  if (ev.doc && (st.currentDoc || "入院记录") !== ev.doc) return;  // 串流保护
   if (ev.event === "agent_start"){
     const i = AGENT_KEYS.indexOf(ev.agent);
     if (i >= 0){
@@ -542,17 +570,19 @@ function handleAgentEvent(ev, key){
       if (bar) bar.style.width = `${Math.round(((i + 1) / AGENT_KEYS.length) * 100)}%`;
     }
   } else if (ev.event === "final"){
-    const st = flowState(key);
-    st.agentResult = { fields: ev.fields, stats: ev.stats };
+    const doc = ev.doc || st.currentDoc || "入院记录";
+    setAgentResult(st, doc, { fields: ev.fields, stats: ev.stats });
+    st.currentDoc = doc;
     persistFlow(key);
-    renderAgentResult(document.getElementById("step-body"), key, st.agentResult);
+    renderAgentResult(document.getElementById("step-body"), key, getAgentResult(st, doc), doc);
   } else if (ev.event === "error"){
     const done = document.getElementById("gen-done");
     if (done) done.innerHTML = `<div class="notice">⚠ 生成失败：${esc(ev.error)}</div>`;
   }
 }
-function renderAgentResult(body, key, result){
+function renderAgentResult(body, key, result, doc){
   const s = result.stats;
+  const docName = doc || "入院记录";
   body.innerHTML = `
     <div class="gen-progress"><i style="width:100%"></i></div>
     <div class="ag-grid">
@@ -565,7 +595,7 @@ function renderAgentResult(body, key, result){
       }).join("")}
     </div>
     <div class="card" style="padding:14px 20px;margin-bottom:16px">
-      <b style="font-family:var(--serif)">生成统计（真实流水线）</b>
+      <b style="font-family:var(--serif)">生成统计（真实流水线 · ${esc(docName)}）</b>
       <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;line-height:1.9">
         真实草稿 ${s.passed_fields} 字段（蓝 ${s.by_source.blue} / 绿 ${s.by_source.green} / 灰 ${s.by_source.gray}）·
         总耗时 ${(s.total_ms / 1000).toFixed(1)}s · 降级智能体：${s.degraded_agents.length ? esc(s.degraded_agents.join("、")) : "无"}
@@ -579,15 +609,20 @@ function renderAgentResult(body, key, result){
     </div>`;
   document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
   document.getElementById("regen").onclick = () => {
-    const st2 = flowState(key); st2.agentResult = null; persistFlow(key);
+    const st2 = flowState(key);
+    if (st2.agentResults) delete st2.agentResults[docName];
+    if (docName === "入院记录") st2.agentResult = null;
+    persistFlow(key);
     renderStepGenerate(document.getElementById("step-body"), key, getAdm("DA0001", 1));
   };
 }
 
 /* ---------------- Step3 四色确认 ---------------- */
-function draftToDoc(result, admRec){
+function draftToDoc(result, admRec, docName){
   // 真草稿 → 确认页 doc 结构（金标准 doc 作模板兜底：字段标签集与下拉信息）
-  const gold = admRec.docs.find(d => d.type === "入院记录");
+  const gold = admRec.docs.find(d => d.type === docName)
+    || admRec.docs.find(d => d.type === "病程记录" && (d.title || "").includes(docName))
+    || admRec.docs.find(d => d.type === "入院记录");
   const byLabel = {};
   result.fields.forEach(f => byLabel[f.label] = f);
   const fields = gold.fields.map((f, i) => {
@@ -596,12 +631,23 @@ function draftToDoc(result, admRec){
                    dropdown: f.dropdown, _src: hit.source, _basis: hit.basis, _i: i }
                : { ...f, _i: i, _src: null };
   });
-  return { type: "入院记录", title: gold.title, ts: gold.ts, fields, _real: true };
+  // LLM 生成但模板中不存在的字段（如首程五小节）追加展示
+  result.fields.forEach(f => {
+    if (f.label && !fields.some(x => x.label === f.label))
+      fields.push({ label: f.label, value: f.value, binding: f.binding, _src: f.source, _basis: f.basis, _i: fields.length, _new: true });
+  });
+  return { type: docName, title: gold.title, ts: gold.ts, fields, _real: true };
 }
 function renderStepConfirm(body, key, adm){
   const st = flowState(key);
   const admRec = getPatient("DA0001").admissions[0];
-  const doc = st.agentResult ? draftToDoc(st.agentResult, admRec) : admRec.docs.find(d => d.type === "入院记录");
+  const curDoc = st.currentDoc || "入院记录";
+  const res = getAgentResult(st, curDoc);
+  const doc = res ? draftToDoc(res, admRec, curDoc)
+    : admRec.docs.find(d => d.type === curDoc)
+      || admRec.docs.find(d => d.type === "病程记录" && (d.title || "").includes(curDoc))
+      || admRec.docs.find(d => d.type === "入院记录");
+  const qc = res && res.stats ? res.stats.qc : null;
   const labeled = doc.fields.map((f, i) => ({ ...f, _i: i })).filter(f => f.label);
   // 冲突检测
   const byLabel = {};
@@ -622,6 +668,15 @@ function renderStepConfirm(body, key, adm){
     : st.filter === "yellow" ? c === "yellow" : true;
 
   body.innerHTML = `
+    ${curDoc !== "入院记录" ? `<div class="notice" style="margin-bottom:14px">📝 当前核对文书：<b>${esc(curDoc)}</b>${res ? "" : "（AI 草稿未生成，以下为金标准演示值）"}</div>` : ""}
+    ${qc ? `<div class="qc-report">
+      <div class="qc-head" onclick="const d=document.getElementById('qc-detail');d.style.display=d.style.display==='none'?'block':'none'">
+        🛡 <b>质控校验报告</b>：${esc(qc.summary)}<span class="qc-arrow">▾ 明细</span></div>
+      <div class="qc-detail" id="qc-detail" style="display:none">
+        ${qc.blocked.length ? qc.blocked.map(b => `<div class="qc-item bad">⛔ <b>${esc(b.label)}</b> — ${esc(b.reason)}</div>`).join("") : `<div class="qc-item ok">✓ 无拦截修正项</div>`}
+        ${(qc.warnings || []).map(w => `<div class="qc-item warn">⚠ ${esc(w)}</div>`).join("")}
+      </div>
+    </div>` : ""}
     <div class="legend">
       ${Object.entries(COLOR_META).map(([k, m]) => `<span><span class="cdot ${m.dot}"></span>${m.name} —— ${m.tip}</span>`).join("")}
     </div>
@@ -784,14 +839,20 @@ function saveEdit(fid){
 
 /* ---------------- Step4 归档 ---------------- */
 function renderStepArchive(body, key, adm){
-  const doc = window._draftDoc || getPatient("DA0001").admissions[0].docs.find(d => d.type === "入院记录");
+  const admRec = getPatient("DA0001").admissions[0];
+  const curDoc = flowState(key).currentDoc || "入院记录";
+  const doc = window._draftDoc
+    || (getAgentResult(flowState(key), curDoc) ? draftToDoc(getAgentResult(flowState(key), curDoc), admRec, curDoc) : null)
+    || admRec.docs.find(d => d.type === curDoc)
+    || admRec.docs.find(d => d.type === "病程记录" && (d.title || "").includes(curDoc))
+    || admRec.docs.find(d => d.type === "入院记录");
   const st = flowState(key);
   const labeled = doc.fields.filter(f => f.label);
   const xml = buildXML(doc);
   body.innerHTML = `
     <div class="arch-grid">
       <div class="card" style="padding:20px 24px">
-        <div class="md-title" style="font-size:16px">归档预览 · XTextDocument（字段回填包）</div>
+        <div class="md-title" style="font-size:16px">归档预览 · XTextDocument（字段回填包 · ${esc(doc.type)}）</div>
         <div style="font-size:12px;color:var(--ink-3);margin-bottom:12px">按院内模板 DataSource/BindingPath 绑定规范回填 · 共 ${labeled.length} 个字段 · ${Object.keys(st.edits).length} 处医生修改已生效</div>
         <div class="xml-view">${esc(xml)}</div>
         <div style="margin-top:14px;display:flex;gap:10px">
