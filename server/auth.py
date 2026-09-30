@@ -68,11 +68,13 @@ _DDL_SQLITE = [
         created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT NOT NULL)""",
 ]
 
+_ACTIVE_SQLITE = SQLITE_PATH  # 实际生效的 SQLite 路径（目录不可写时自动降级到 /tmp）
+
 def _connect():
     if BACKEND == "mysql":
         import pymysql
         return pymysql.connect(cursorclass=pymysql.cursors.DictCursor, autocommit=True, **MYSQL_CONF)
-    conn = sqlite3.connect(SQLITE_PATH, timeout=10)
+    conn = sqlite3.connect(_ACTIVE_SQLITE, timeout=10)
     conn.isolation_level = None  # autocommit，与 MySQL 分支 autocommit=True 语义一致
     conn.row_factory = sqlite3.Row
     return conn
@@ -81,13 +83,33 @@ def _rows(cur):
     return [dict(r) for r in cur.fetchall()]
 
 def init_db():
-    conn = _connect()
-    try:
-        cur = conn.cursor()
-        for ddl in (_DDL_MYSQL if BACKEND == "mysql" else _DDL_SQLITE):
-            cur.execute(ddl)
-    finally:
-        conn.close()
+    global _ACTIVE_SQLITE
+    if BACKEND == "mysql":
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            for ddl in _DDL_MYSQL:
+                cur.execute(ddl)
+        finally:
+            conn.close()
+        return
+    # SQLite：依次尝试配置路径与 /tmp 兜底（容器内挂载的 repo/ 可能为只读）
+    last_err = None
+    for cand in (SQLITE_PATH, "/tmp/mra_local_dev.db"):
+        try:
+            conn = sqlite3.connect(cand, timeout=10)
+            conn.isolation_level = None
+            cur = conn.cursor()
+            for ddl in _DDL_SQLITE:
+                cur.execute(ddl)
+            conn.close()
+            _ACTIVE_SQLITE = cand
+            if cand != SQLITE_PATH:
+                print(f"[auth] server 目录不可写，SQLite 降级至 {cand}（容器重启数据清空；生产请配置 MySQL）", file=sys.stderr)
+            return
+        except sqlite3.OperationalError as e:
+            last_err = e
+    raise RuntimeError(f"SQLite 数据库无法创建（{last_err}）；请配置 MRA_MYSQL_* 使用 MySQL")
 
 # ---------------- 密码 ----------------
 def _hash_pwd(pwd, salt_hex):
