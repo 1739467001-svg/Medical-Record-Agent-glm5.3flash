@@ -486,10 +486,15 @@ function renderStepGenerate(body, key, adm){
         </div>`).join("")}
     </div>
     <div class="gen-done-cta" id="gen-done"></div>`;
-  // 流式消费 NDJSON
+  // 流式消费 NDJSON（真实六智能体事件；服务端错误如实展示，绝不本地伪造智能体动画）
   fetch("api/generate-draft", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code: "DA0001", admission: 1 }) })
     .then(resp => {
+      if (!resp.ok){
+        return resp.json().catch(() => ({})).then(d => {
+          throw new Error(d.error || `AI 服务返回 ${resp.status}`);
+        });
+      }
       const reader = resp.body.getReader(), dec = new TextDecoder();
       let buf = "";
       const pump = () => reader.read().then(({ done, value }) => {
@@ -505,9 +510,10 @@ function renderStepGenerate(body, key, adm){
       });
       return pump();
     })
-    .catch(() => {
+    .catch(err => {
       const done = document.getElementById("gen-done");
-      if (done) done.innerHTML = `<div class="notice">⚠ 无法连接 AI 服务（本地静态环境无此接口）。请访问线上部署：http://60.205.204.162/mra/</div>`;
+      const msg = err && err.message ? err.message : "无法连接 AI 服务（本地静态环境无此接口）";
+      if (done) done.innerHTML = `<div class="notice">⚠ ${esc(msg)}。线上部署（已配置 DeepSeek）：http://60.205.204.162/mra/</div>`;
     });
 }
 function handleAgentEvent(ev, key){
