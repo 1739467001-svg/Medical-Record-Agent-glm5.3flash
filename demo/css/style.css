@@ -603,3 +603,31 @@ table.fm .mono{font-family:var(--mono);font-size:11px;color:var(--primary-deep)}
   .auth-card{padding:22px 20px 18px}
   .auth-row{grid-template-columns:1fr}
 }
+
+/* ---------- 生成步骤：文书切换页签 ---------- */
+.doc-tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.doc-tab{
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1;min-width:220px;
+  padding:10px 16px;border:1px solid var(--line-2);border-radius:11px;background:var(--card);
+  cursor:pointer;font-family:var(--sans);font-size:13.5px;font-weight:600;color:var(--ink-2);
+  letter-spacing:.03em;transition:.16s;text-align:left;
+}
+.doc-tab small{font-size:11px;font-weight:400;color:var(--ink-3);letter-spacing:.02em}
+.doc-tab:hover{border-color:var(--primary);transform:translateY(-1px)}
+.doc-tab.on{border-color:var(--primary);background:var(--primary-soft);color:var(--primary-deep);box-shadow:0 0 0 3px rgba(13,110,140,.1)}
+.doc-tab.on small{color:var(--primary)}
+
+/* ---------- 四色确认：质控报告条 ---------- */
+.qc-report{
+  border:1px solid var(--yellow-line);border-left:4px solid var(--yellow);border-radius:12px;
+  background:var(--yellow-bg);margin-bottom:14px;overflow:hidden;
+}
+.qc-head{display:flex;align-items:center;gap:8px;padding:11px 16px;font-size:13px;color:var(--ink);cursor:pointer;user-select:none}
+.qc-head b{color:var(--yellow)}
+.qc-arrow{margin-left:auto;font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.qc-detail{padding:4px 16px 12px;display:block}
+.qc-item{font-size:12.5px;line-height:1.8;padding:5px 0;border-top:1px dashed rgba(181,119,0,.25);color:var(--ink-2)}
+.qc-item b{color:var(--ink)}
+.qc-item.bad{color:var(--red)}
+.qc-item.warn{color:var(--yellow)}
+.qc-item.ok{color:var(--green)}

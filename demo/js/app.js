@@ -122,13 +122,13 @@ function viewWorkbench(){
         </div>
         <button class="btn primary" onclick="location.hash='#/adm/DA0001/1'">${task1Btn}</button>
       </div>
-      <div class="card task-row t-dim">
-        <div class="t-icon">📝</div>
+      <div class="card task-row">
+        <div class="t-icon" style="background:var(--primary-soft)">📝</div>
         <div class="t-main">
-          <div class="t-title">患者A · 首次病程记录 — 待书写</div>
-          <div class="t-sub">法定时限：入院 8h 内 · AI 生成将于一期扩展开放（当前请手工书写）</div>
+          <div class="t-title">患者A · 首次病程记录 — AI 生成已开放</div>
+          <div class="t-sub">法定时限：入院 8h 内 · 病例特点 / 诊断依据 / 鉴别诊断（知识辅助）/ 诊疗计划</div>
         </div>
-        <span class="tag" style="background:var(--paper-2);color:var(--ink-3)">二期开放</span>
+        <button class="btn primary" onclick="startFlowDoc('首次病程记录')">生成草稿 →</button>
       </div>
       <div class="card task-row t-dim">
         <div class="t-icon">🩺</div>
@@ -541,6 +541,13 @@ function setFlowDoc(doc){
   const st = flowState(flowKey("DA0001", 1));
   st.currentDoc = doc; persistFlow(st.key || flowKey("DA0001", 1));
   viewAdmission("DA0001", 1);
+}
+function startFlowDoc(doc){
+  const key = flowKey("DA0001", 1), st = flowState(key);
+  st.currentDoc = doc;
+  st.step = 2;  // 从工作台直达生成步骤（已有草稿会直接显示结果页）
+  persistFlow(key);
+  location.hash = "#/adm/DA0001/1";
 }
 function handleAgentEvent(ev, key){
   const st = flowState(key);
