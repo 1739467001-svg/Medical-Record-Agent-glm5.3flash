@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agents import run_pipeline, aggregator  # noqa: E402
 import auth  # noqa: E402  登录/注册/会话（server/auth.py）
+import records  # noqa: E402  归档与审签流（server/records.py，P2-G）
 
 DATA_PATH = os.environ.get("MRA_DATA_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "data", "patients.json"))
 PORT = int(os.environ.get("MRA_LLM_PORT", "8090"))
@@ -130,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth": auth.BACKEND})
         if path.startswith("/auth/"):
             return auth.handle(self, {}, path)
+        if path == "/records" or path.startswith("/records/"):
+            return records.handle(self, {}, path)
         if STATIC_DIR:
             return self._static(path)
         self._json(404, {"error": "not found"})
@@ -145,6 +148,13 @@ class Handler(BaseHTTPRequestHandler):
             if "__error__" in body:
                 return self._json(400, {"error": f"请求体解析失败: {body['__error__']}"})
             return auth.handle(self, body, path)
+        if path.startswith("/records/"):
+            if not self._rate_ok(_auth_hits, AUTH_RATE_LIMIT):
+                return self._json(429, {"error": "请求过于频繁，请稍后再试"})
+            body = self._read_body()
+            if "__error__" in body:
+                return self._json(400, {"error": f"请求体解析失败: {body['__error__']}"})
+            return records.handle(self, body, path)
         if path not in ("/generate-summary", "/generate-draft"):
             return self._json(404, {"error": "not found"})
         if not self._rate_ok(_hits, RATE_LIMIT):

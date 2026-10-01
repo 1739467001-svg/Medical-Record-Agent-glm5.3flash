@@ -78,7 +78,7 @@ function route(){
   const parts = hash.slice(2).split("/");
   const [view, a, b] = parts;
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.remove("active"));
-  const navMap = { workbench: "工作台", manual: "手册", about: "说明" };
+  const navMap = { workbench: "工作台", review: "审签", manual: "手册", about: "说明" };
   const navEl = [...document.querySelectorAll("[data-nav]")].find(n => n.textContent === navMap[view]);
   if (navEl) navEl.classList.add("active");
   window.scrollTo(0, 0);
@@ -88,6 +88,7 @@ function route(){
   if (view === "fieldmap") return viewFieldmap();
   if (view === "manual") return viewManual();
   if (view === "about") return viewAbout();
+  if (view === "review") return viewReview();
   viewWorkbench();
 }
 window.addEventListener("hashchange", route);
@@ -727,12 +728,46 @@ function renderStepConfirm(body, key, adm){
     const doctor = window.prompt("请输入确认医生姓名（将作为签章写入留痕与回执）：", st.confirmedBy || "王医生");
     if (!doctor) return;
     const miss = cCount.yellow;
-    if (window.confirm("签章医生：" + doctor + "\n确认将本份《入院记录》草稿归档至院内系统？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n（演示环境为模拟归档）")){
-      const st2 = flowState(key); st2.step = 4; st2.confirmedBy = doctor || st2.confirmedBy; persistFlow(key); viewAdmission("DA0001", 1);
+    const real = S.user && !S.user.demo;
+    const tip = real
+      ? "签章医生：" + doctor + "\n确认将本份《" + doc.type + "》提交归档？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n\n提交后进入审签流程：上级医师签发 / 退回。"
+      : "签章医生：" + doctor + "\n确认将本份《入院记录》草稿归档至院内系统？" + (miss ? `\n\n⚠ 尚有 ${miss} 项缺失待补（黄色），归档后将按院内流程补录。` : "") + "\n（演示环境为模拟归档）";
+    if (window.confirm(tip)){
+      submitArchive(key, doc, doctor, real);
     }
   };
   window._draftDoc = doc;
   window._draftEdits = st.edits;
+}
+/* P2-G 真归档：登录用户提交归档包至服务端（审签流入口）；失败降级为演示归档 */
+async function submitArchive(key, doc, doctor, real){
+  const st = flowState(key);
+  if (real){
+    const admRec = getPatient("DA0001").admissions[0];
+    const agentRes = getAgentResult(st, doc.type);
+    const payload = {
+      code: "DA0001", admission: 1, doc: doc.type, disease: (admRec.disease || "").replace(/（.*）$/, ""),
+      fields: doc.fields,
+      qc: (agentRes && agentRes.stats && agentRes.stats.qc) || {},
+      edits: st.editLog || [],
+      xml: buildXML(doc)
+    };
+    try{
+      const r = await fetch("api/records/submit", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok){
+        const st2 = flowState(key);
+        st2.step = 4; st2.confirmedBy = doctor; st2.archive = d; persistFlow(key);
+        viewAdmission("DA0001", 1);
+        return;
+      }
+      alert("归档服务返回错误：" + (d.error || "未知") + "（本次降级为演示归档）");
+    } catch (e) {
+      alert("归档服务不可达（" + e.message + "），本次降级为演示归档");
+    }
+  }
+  const st2 = flowState(key); st2.step = 4; st2.confirmedBy = doctor; persistFlow(key); viewAdmission("DA0001", 1);
 }
 function setConfirmFilter(k){
   const st = flowState("DA0001_1"); st.filter = k; persistFlow("DA0001_1");
@@ -871,8 +906,21 @@ function renderStepArchive(body, key, adm){
       </div>
       <div class="card arch-receipt">
         <div class="receipt-check"><svg viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+        ${st.archive ? `
+        <div style="font-family:var(--serif);font-size:20px;font-weight:700;color:var(--green);margin-bottom:4px">已提交归档 · 待上级医师审签</div>
+        <div style="font-size:12px;color:var(--ink-3);margin-bottom:16px">已入审签流：上级医师签发 / 退回 → 质控科抽查（P2-G）</div>
+        <div class="receipt-line"><span>归档编号</span><b>${esc(st.archive.record_no || "—")}</b></div>
+        <div class="receipt-line"><span>文书类型</span><b>${esc(doc.type)} · ${esc(admRec.disease || "").replace(/（.*）$/, "")}</b></div>
+        <div class="receipt-line"><span>确认医生（签章）</span><b>${esc((st.confirmedBy || "王医生") + "（住院医师）")}</b></div>
+        <div class="receipt-line"><span>当前状态</span><b>${esc(st.archive.status_name || "待上级医师审签")}</b></div>
+        <div class="receipt-line"><span>医生修改</span><b>${st.editLog.length} 处（留痕已随包存档）</b></div>
+        <div class="receipt-line"><span>留痕</span><b>生成/修改/确认/审签 全程可追溯</b></div>
+        <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+          <button class="btn primary big" onclick="location.hash='#/review'">查看审签进度 →</button>
+          <button class="btn big" onclick="location.hash='#/workbench'">返回工作台</button>
+        </div>` : `
         <div style="font-family:var(--serif);font-size:20px;font-weight:700;color:var(--green);margin-bottom:4px">已归档（模拟）</div>
-        <div style="font-size:12px;color:var(--ink-3);margin-bottom:16px">正式环境经对接层回写院内电子病历系统</div>
+        <div style="font-size:12px;color:var(--ink-3);margin-bottom:16px">登录账号提交可进入真实审签流（上级医师审签 + 质控科抽查）</div>
         <div class="receipt-line"><span>归档编号</span><b>AR-20260902-0047</b></div>
         <div class="receipt-line"><span>文书类型</span><b>入院记录 · 慢性阑尾炎</b></div>
         <div class="receipt-line"><span>确认医生（签章）</span><b>${esc((flowState(key).confirmedBy || "王医生") + "（住院医师）")}</b></div>
@@ -882,7 +930,7 @@ function renderStepArchive(body, key, adm){
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button>
           <button class="btn big" onclick="location.hash='#/patient/DA0001'">在患者全景中查看</button>
-        </div>
+        </div>`}
       </div>
     </div>`;
 }
@@ -915,6 +963,165 @@ function downloadXML(){
   a.click(); URL.revokeObjectURL(a.href);
 }
 function exportDraftXML(){ downloadXML(); }
+
+/* ================================================================ */
+/* 审签工作台（P2-G 多角色与审签流）                                  */
+/* 住院医师：本人文书 + 审签/退回状态；上级医师：签发/退回；质控科：抽查  */
+/* ================================================================ */
+const RV_STATUS = {
+  submitted: { name: "待审签", bg: "var(--yellow-bg)", fg: "var(--yellow)", line: "var(--yellow-line)" },
+  signed:    { name: "已审签", bg: "var(--green-bg)", fg: "var(--green)", line: "var(--green-line)" },
+  rejected:  { name: "已退回", bg: "#fdeceb", fg: "var(--red)", line: "#f2c4bd" }
+};
+const RV_SPOT = { ok: { name: "抽查合格", fg: "var(--green)" }, issue: { name: "抽查缺陷", fg: "var(--red)" } };
+let rvFilter = "";
+
+function viewReview(){
+  if (!S.user){ location.hash = "#/login"; return; }
+  const role = S.user.demo ? null : (S.user.role || "resident");
+  const head = S.user.demo
+    ? `<div class="notice" style="margin-top:18px">您处于<b>演示模式</b>——审签工作台需医生账号。请退出后登录，或分别注册「上级医师」「质控科」角色体验完整审签流（归档提交也需账号）。</div>`
+    : "";
+  const tabs = ["", "submitted", "signed", "rejected"].map(s =>
+    `<a class="rv-tab ${rvFilter === s ? "on" : ""}" onclick="rvSetFilter('${s}')">${s ? RV_STATUS[s].name : "全部"} </a>`).join("");
+  $app.innerHTML = `
+    <div class="page-head">
+      <div class="page-title">审签工作台<small>${
+        S.user.demo ? "演示模式（需登录）" :
+        role === "attending" ? "上级医师 · 签名责任方：签发或退回（PRD 2.1 责任矩阵）" :
+        role === "qc" ? "质控科 · 病历抽查：合格 / 缺陷标记" :
+        "住院医师 · 我的归档与审签进度（退回原因在此回流）"}</small></div>
+    </div>
+    ${head}
+    <div id="rv-body" style="${S.user.demo ? "display:none" : ""}">
+      <div class="rv-tabs">${tabs}</div>
+      <div id="rv-stats" class="rv-stats"></div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table class="fm rv-table">
+          <thead><tr><th>归档编号</th><th>文书 / 病种</th><th>书写医生</th><th>字段（黄/总）</th><th>审签状态</th><th>抽查</th><th>提交时间</th><th style="width:90px">操作</th></tr></thead>
+          <tbody id="rv-rows"><tr><td colspan="8" style="text-align:center;padding:28px;color:var(--ink-3)">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>`;
+  if (!S.user.demo) loadReviewList();
+}
+function rvSetFilter(s){ rvFilter = s; viewReview(); }
+async function loadReviewList(){
+  const body = document.getElementById("rv-body");
+  if (!body) return;
+  try{
+    const r = await fetch("api/records" + (rvFilter ? "?status=" + rvFilter : ""));
+    if (r.status === 401){ S.user = null; renderUserArea(); location.hash = "#/login"; return; }
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "加载失败");
+    const st = d.stats || {};
+    document.getElementById("rv-stats").innerHTML = `
+      <span class="tag" style="background:var(--yellow-bg);color:var(--yellow);border:1px solid var(--yellow-line)">待审签 ${st.submitted || 0}</span>
+      <span class="tag" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-line)">已审签 ${st.signed || 0}</span>
+      <span class="tag" style="background:#fdeceb;color:var(--red);border:1px solid #f2c4bd">已退回 ${st.rejected || 0}</span>
+      <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">抽查合格 ${(d.spot || {}).ok || 0} · 缺陷 ${(d.spot || {}).issue || 0}</span>
+      ${isReviewer(S.user) ? "" : `<span class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)">仅显示本人文书</span>`}`;
+    const rows = d.records || [];
+    document.getElementById("rv-rows").innerHTML = rows.length ? rows.map(r => `
+      <tr>
+        <td class="mono">${esc(r.record_no)}</td>
+        <td><b>${esc(r.doc_type)}</b><span style="color:var(--ink-3)"> · ${esc(r.disease || "—")}</span></td>
+        <td>${esc(r.resident_name)}</td>
+        <td>${r.yellow_cnt ? `<b style="color:var(--yellow)">${r.yellow_cnt}</b>` : "0"} / ${r.total_cnt}</td>
+        <td><span class="tag" style="background:${RV_STATUS[r.status].bg};color:${RV_STATUS[r.status].fg};border:1px solid ${RV_STATUS[r.status].line}">${esc(RV_STATUS[r.status].name)}</span>
+            ${r.status !== "submitted" && r.signed_name ? `<div style="font-size:10.5px;color:var(--ink-3);margin-top:2px">${esc(r.signed_name)}</div>` : ""}</td>
+        <td style="color:${RV_SPOT[r.spot_result] ? RV_SPOT[r.spot_result].fg : "var(--ink-3)"}">${esc(RV_SPOT[r.spot_result] ? RV_SPOT[r.spot_result].name : "未抽查")}</td>
+        <td style="color:var(--ink-3)">${esc((r.created_at || "").slice(0, 16))}</td>
+        <td><button class="mini-btn" onclick="openReviewDetail(${r.id})">查看</button></td>
+      </tr>`).join("")
+      : `<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--ink-3)">暂无文书——住院医师在「四色确认」步骤提交归档后出现在这里</td></tr>`;
+  } catch (e) {
+    const el = document.getElementById("rv-rows");
+    if (el) el.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--red)">${esc(e.message)}</td></tr>`;
+  }
+}
+async function openReviewDetail(id){
+  let d;
+  try{
+    const r = await fetch("api/records/detail?id=" + id);
+    d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || "加载失败");
+  } catch (e) { return alert("加载详情失败：" + e.message); }
+  const rec = d.record;
+  const colorCnt = { blue: 0, green: 0, gray: 0, yellow: 0 };
+  (rec.fields || []).forEach(f => { colorCnt[colorOf(f)]++; });
+  const fieldRows = (rec.fields || []).filter(f => f.label).slice(0, 80).map(f => {
+    const c = colorOf(f);
+    return `<div class="f-row c-${c}">
+      <div class="lb"><span class="cdot ${c}"></span>${esc(f.label)}</div>
+      <div class="vv">${esc(String(f.value || "").slice(0, 120)) || '<span style="color:var(--yellow)">（空 · 待补）</span>'}</div>
+      <div class="ops"></div>
+    </div>`;
+  }).join("") || '<div style="padding:12px;color:var(--ink-3)">（无字段数据）</div>';
+  const qc = rec.qc || {};
+  const canSign = !S.user.demo && S.user.role === "attending" && rec.status === "submitted";
+  const canSpot = !S.user.demo && S.user.role === "qc";
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-mask" onclick="if(event.target===this)closeModal()">
+      <div class="modal" style="max-width:860px">
+        <div class="modal-head"><span class="t">${esc(rec.doc_type)} · ${esc(rec.disease || "")}</span>
+          <span class="tag" style="background:${RV_STATUS[rec.status].bg};color:${RV_STATUS[rec.status].fg};border:1px solid ${RV_STATUS[rec.status].line}">${esc(RV_STATUS[rec.status].name)}</span>
+          <span class="tag" style="background:var(--paper-2);color:var(--ink-3)">${esc(rec.record_no)}</span>
+          <span class="x" onclick="closeModal()">✕</span></div>
+        <div class="modal-body">
+          <div class="rv-meta">
+            <span>书写医生：<b>${esc(rec.resident_name)}</b></span>
+            <span>提交时间：<b>${esc((rec.created_at || "").slice(0, 16))}</b></span>
+            <span>字段：<b>${rec.total_cnt}</b>（黄 ${rec.yellow_cnt}）</span>
+            <span>四色：🔵${colorCnt.blue} 🟢${colorCnt.green} ⚪${colorCnt.gray} 🟡${colorCnt.yellow}</span>
+            <span>抽查：<b style="color:${RV_SPOT[rec.spot_result] ? RV_SPOT[rec.spot_result].fg : "var(--ink-3)"}">${esc(RV_SPOT[rec.spot_result] ? RV_SPOT[rec.spot_result].name : "未抽查")}</b>${rec.spot_by ? `（${esc(rec.spot_by)}）` : ""}</span>
+          </div>
+          ${rec.status === "rejected" ? `<div class="notice">↩ <b>上级医师退回原因：</b>${esc(rec.sign_comment || "（未填写）")}<br><span style="color:var(--ink-3)">修改后请在「四色确认」步骤重新提交，将生成新的归档编号。</span></div>` : ""}
+          ${rec.status === "signed" && rec.sign_comment ? `<div class="src-pop" style="margin-bottom:14px">✓ <b>审签意见：</b>${esc(rec.sign_comment)}——${esc(rec.signed_name)}</div>` : ""}
+          ${rec.spot_result && rec.spot_comment ? `<div class="src-pop" style="margin-bottom:14px">🔍 <b>抽查意见：</b>${esc(rec.spot_comment)}——${esc(rec.spot_by || "质控科")}</div>` : ""}
+          ${qc.summary ? `<div class="rv-qc"><b>机器质控结论：</b>${esc(qc.summary)}${(qc.warnings || []).length ? "<br>⚠ " + qc.warnings.map(w => esc(w)).join("<br>⚠ ") : ""}${(qc.missing || []).length ? `<br>缺失待补：${qc.missing.map(m => esc(m)).join("、")}` : ""}</div>` : ""}
+          ${(rec.edits || []).length ? `<div class="rv-qc">✎ <b>医生修改留痕 ${rec.edits.length} 处</b>：${rec.edits.slice(0, 5).map(e => `${esc(e.field || "")}「${esc(String(e.before || "").slice(0, 20))}」→「${esc(String(e.after || "").slice(0, 20))}」`).join("；")}${rec.edits.length > 5 ? " …" : ""}</div>` : ""}
+          <div class="md-title" style="font-size:14px;margin:6px 0 2px">字段明细（四色）</div>
+          ${fieldRows}
+          <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+            ${canSign ? `<button class="btn primary" onclick="reviewAction(${rec.id}, 'sign')">✓ 签发（上级医师签章）</button>
+            <button class="btn" style="border-color:var(--yellow-line);color:var(--yellow)" onclick="reviewAction(${rec.id}, 'reject')">↩ 退回修改</button>` : ""}
+            ${canSpot ? `<button class="btn primary" onclick="spotAction(${rec.id}, 'ok')">🔍 抽查合格</button>
+            <button class="btn" style="border-color:#f2c4bd;color:var(--red)" onclick="spotAction(${rec.id}, 'issue')">🔍 标记缺陷</button>` : ""}
+            <button class="btn ghost" onclick="closeModal()">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+async function reviewAction(id, action){
+  let comment = "";
+  if (action === "reject"){
+    comment = window.prompt("退回原因（将回流给书写医生，必填）：") || "";
+    if (!comment.trim()) return;
+  }
+  const r = await fetch("api/records/review", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, action, comment }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) return alert("审签失败：" + (d.error || "未知错误"));
+  closeModal();
+  alert(action === "sign" ? "✓ 已签发（" + (d.signed_name || "") + "）" : "↩ 已退回，原因已回流给书写医生");
+  loadReviewList();
+}
+async function spotAction(id, result){
+  let comment = "";
+  if (result === "issue"){
+    comment = window.prompt("缺陷描述（将存档供书写医生整改）：") || "";
+    if (!comment.trim()) return;
+  }
+  const r = await fetch("api/records/spotcheck", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, result, comment }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) return alert("抽查失败：" + (d.error || "未知错误"));
+  closeModal();
+  alert(result === "ok" ? "✓ 已标记抽查合格" : "🔍 已标记抽查缺陷");
+  loadReviewList();
+}
 
 /* ================================================================ */
 /* 字段地图                                                          */
@@ -1033,13 +1240,18 @@ function tourSteps(){
 function demoUser(){
   try { return JSON.parse(localStorage.getItem(DEMO_USER_KEY)); } catch (e) { return null; }
 }
+const ROLE_NAMES_CN = { resident: "住院医师", attending: "上级医师", qc: "质控科" };
+const roleName = u => (u && (u.role_name || ROLE_NAMES_CN[u.role])) || "住院医师";
+const isReviewer = u => !!u && !u.demo && (u.role === "attending" || u.role === "qc");
 function renderUserArea(){
   const el = document.getElementById("user-area");
+  const nv = document.getElementById("nav-review");
+  if (nv) nv.style.display = isReviewer(S.user) ? "" : "none";
   if (!el) return;
   if (S.user){
     const u = S.user;
     el.innerHTML = `<div style="display:flex;align-items:center;gap:10px">
-      <div class="user-chip"><span class="avatar">${esc((u.name || u.username || "医").slice(0, 1))}</span><div><b>${esc(u.name || u.username)}</b><i>${esc(u.department || "")}${u.title ? " · " + esc(u.title) : ""}</i></div></div>
+      <div class="user-chip"><span class="avatar">${esc((u.name || u.username || "医").slice(0, 1))}</span><div><b>${esc(u.name || u.username)}</b><i>${esc(u.department || "")}${u.title ? " · " + esc(u.title) : ""}${u.demo ? "" : " · " + esc(roleName(u))}</i></div></div>
       <button class="btn ghost" style="color:rgba(238,247,250,.85);border-color:rgba(238,247,250,.35);padding:6px 12px" onclick="doLogout()">退出</button></div>`;
   } else {
     el.innerHTML = `<button class="btn primary" style="padding:7px 16px" onclick="location.hash='#/login'">登录 / 注册</button>`;
@@ -1067,9 +1279,14 @@ function viewAuth(mode){
         ${isReg ? `
         <label class="auth-lab">姓名<input id="au-name" maxlength="32" placeholder="真实姓名（病案签章用）"></label>
         <div class="auth-row">
-          <label class="auth-lab">科室<select id="au-dept"><option>普外科</option><option>内科</option><option>外科</option><option>妇产科</option><option>儿科</option><option>急诊科</option><option>其他</option></select></label>
+          <label class="auth-lab">科室<select id="au-dept"><option>普外科</option><option>内科</option><option>外科</option><option>妇产科</option><option>儿科</option><option>急诊科</option><option>医务科（质控）</option><option>其他</option></select></label>
           <label class="auth-lab">职称<select id="au-title"><option>住院医师</option><option>主治医师</option><option>副主任医师</option><option>主任医师</option><option>护士</option><option>其他</option></select></label>
-        </div>` : ""}
+        </div>
+        <label class="auth-lab">系统角色（对应病历责任矩阵）<select id="au-role">
+          <option value="resident">住院医师 —— 书写、四色确认与提交归档</option>
+          <option value="attending">上级医师 —— 病历审签（签发 / 退回）</option>
+          <option value="qc">质控科 —— 病历抽查（合格 / 缺陷）</option>
+        </select></label>` : ""}
         <label class="auth-lab">用户名（工号 / 手机号）<input id="au-user" maxlength="32" placeholder="3~32 位字母、数字或下划线"></label>
         <label class="auth-lab">密码<input id="au-pwd" type="password" maxlength="64" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')submitAuth('${isReg ? "register" : "login"}')"></label>
         ${isReg ? `<label class="auth-lab">确认密码<input id="au-pwd2" type="password" maxlength="64" onkeydown="if(event.key==='Enter')submitAuth('register')"></label>` : ""}
@@ -1092,10 +1309,10 @@ async function submitAuth(mode){
   const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
   const username = val("au-user"), password = document.getElementById("au-pwd")?.value || "";
   if (mode === "register"){
-    const name = val("au-name"), department = val("au-dept"), title = val("au-title");
+    const name = val("au-name"), department = val("au-dept"), title = val("au-title"), role = val("au-role") || "resident";
     const pwd2 = document.getElementById("au-pwd2")?.value || "";
     if (password !== pwd2) return authError("两次输入的密码不一致");
-    const { ok, d } = await authPost("/auth/register", { username, password, name, department, title });
+    const { ok, d } = await authPost("/auth/register", { username, password, name, department, title, role });
     if (!ok) return authError(d.error || "注册失败，请稍后再试");
     S.user = d.user;
     afterAuth(true);
@@ -1119,7 +1336,7 @@ async function doLogout(){
   location.hash = "#/login";
 }
 function enterDemo(){
-  localStorage.setItem(DEMO_USER_KEY, JSON.stringify({ name: "王医生", department: "普外科", title: "住院医师", demo: true }));
+  localStorage.setItem(DEMO_USER_KEY, JSON.stringify({ name: "王医生", department: "普外科", title: "住院医师", role: "resident", role_name: "住院医师", demo: true }));
   S.user = demoUser();
   renderUserArea();
   location.hash = "#/workbench";

@@ -24,6 +24,13 @@ SESSION_TTL = 7 * 24 * 3600
 PBKDF2_ROUNDS = 200_000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_@.\-]{3,32}$")
 
+# 系统角色（P2-G 多角色与审签流，PRD 2.1 责任矩阵）：
+#   resident  住院/管床医生 —— 书写与确认提交（默认）
+#   attending 上级/查房医师 —— 审签（签发/退回），签名责任方
+#   qc        质控科（科室主任/医务科）—— 病历抽查
+ROLES = ("resident", "attending", "qc")
+ROLE_NAMES = {"resident": "住院医师", "attending": "上级医师", "qc": "质控科"}
+
 MYSQL_CONF = {
     "host": os.environ.get("MRA_MYSQL_HOST", ""),
     "port": int(os.environ.get("MRA_MYSQL_PORT", "3306")),
@@ -90,6 +97,7 @@ def init_db():
             cur = conn.cursor()
             for ddl in _DDL_MYSQL:
                 cur.execute(ddl)
+            _migrate_role_column(cur, mysql=True)
         finally:
             conn.close()
         return
@@ -102,6 +110,7 @@ def init_db():
             cur = conn.cursor()
             for ddl in _DDL_SQLITE:
                 cur.execute(ddl)
+            _migrate_role_column(cur, mysql=False)
             conn.close()
             _ACTIVE_SQLITE = cand
             if cand != SQLITE_PATH:
@@ -110,6 +119,18 @@ def init_db():
         except sqlite3.OperationalError as e:
             last_err = e
     raise RuntimeError(f"SQLite 数据库无法创建（{last_err}）；请配置 MRA_MYSQL_* 使用 MySQL")
+
+def _migrate_role_column(cur, mysql):
+    """P2-G 老库迁移：users 补 role 列（已存在则跳过）。"""
+    if mysql:
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='role'")
+        if cur.fetchone()["n"] == 0:
+            cur.execute("ALTER TABLE users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'resident'")
+    else:
+        cur.execute("PRAGMA table_info(users)")
+        if not any(r[1] == "role" for r in cur.fetchall()):
+            cur.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'resident'")
 
 # ---------------- 密码 ----------------
 def _hash_pwd(pwd, salt_hex):
@@ -159,6 +180,7 @@ def _user_by_token(token):
 def _public_user(u):
     return {"id": u["id"], "username": u["username"], "name": u["name"],
             "department": u.get("department") or "", "title": u.get("title") or "",
+            "role": u.get("role") or "resident", "role_name": ROLE_NAMES.get(u.get("role") or "resident", "住院医师"),
             "tour_done": bool(u.get("tour_done"))}
 
 # ---------------- 校验 ----------------
@@ -168,13 +190,17 @@ def _validate_register(body):
     name = str(body.get("name") or "").strip()
     dept = str(body.get("department") or "").strip()[:64]
     title = str(body.get("title") or "").strip()[:64]
+    role = str(body.get("role") or "resident").strip()
+    if role not in ROLES:
+        role = "resident"
     if not USERNAME_RE.match(username):
         return None, "用户名需为 3~32 位字母/数字/下划线（可用工号或手机号）"
     if len(password) < 6:
         return None, "密码至少 6 位"
     if not name or len(name) > 32:
         return None, "请填写真实姓名（32 字以内）"
-    return {"username": username, "password": password, "name": name, "department": dept, "title": title}, None
+    return {"username": username, "password": password, "name": name,
+            "department": dept, "title": title, "role": role}, None
 
 # ---------------- 路由入口（由 llm_api.py 调用） ----------------
 def handle(handler, body, path_override=None):
@@ -207,15 +233,16 @@ def do_register(handler, body):
         cur.execute(f"SELECT id FROM users WHERE username={q}", (data["username"],))
         if _rows(cur):
             return handler._json(409, {"error": "该用户名已被注册"})
-        cur.execute(f"INSERT INTO users (username, pwd_hash, salt, name, department, title) "
-                    f"VALUES ({q},{q},{q},{q},{q},{q})",
-                    (data["username"], pwd_hash, salt, data["name"], data["department"], data["title"]))
+        cur.execute(f"INSERT INTO users (username, pwd_hash, salt, name, department, title, role) "
+                    f"VALUES ({q},{q},{q},{q},{q},{q},{q})",
+                    (data["username"], pwd_hash, salt, data["name"], data["department"], data["title"], data["role"]))
         uid = cur.lastrowid
     finally:
         conn.close()
     token = _create_session(uid)
     user = {"id": uid, "username": data["username"], "name": data["name"],
-            "department": data["department"], "title": data["title"], "tour_done": False}
+            "department": data["department"], "title": data["title"],
+            "role": data["role"], "role_name": ROLE_NAMES[data["role"]], "tour_done": False}
     handler._json(200, {"ok": True, "user": user}, set_cookies=[_session_cookie(token)])
 
 def do_login(handler, body):
