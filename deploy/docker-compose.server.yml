@@ -1,0 +1,58 @@
+# 生产服务器 /srv/apps/medical-record-agent/docker-compose.yml 的版本化副本
+# 变更流程：改本文件 → 同步到服务器同路径 → docker compose up -d（详见 DEPLOY.md）
+# 历史：2026-10-01 增挂 ./repo/mcp-server:/mcp-server:ro（P2-E 前置：llm-api 加载 ASR 引擎适配器）
+services:
+  medical-record-agent:
+    image: public.ecr.aws/nginx/nginx:1.27-alpine
+    container_name: medical-record-agent
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3904:8080"
+    volumes:
+      - ./repo/demo:/www:ro
+      - ./conf/default.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 96m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/index.html"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  llm-api:
+    image: public.ecr.aws/docker/library/python:3.12-alpine
+    container_name: mra-llm-api
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3905:8090"
+    volumes:
+      - ./repo/server:/app:ro
+      - ./repo/mcp-server:/mcp-server:ro
+      - ./repo/demo/data:/data:ro
+      - ./.llm_env:/.llm_env:ro
+    environment:
+      - MRA_DATA_PATH=/data/patients.json
+      - MRA_LLM_PORT=8090
+    env_file:
+      - ./.llm_env
+    working_dir: /app
+    command: python3 llm_api.py
+    mem_limit: 64m
+    cpus: 0.3
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
