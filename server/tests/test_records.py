@@ -155,5 +155,41 @@ class TestEditsAggregation(unittest.TestCase):
         self.assertEqual(f("医生签名", "", "王"), "yellow")       # 签名 → 黄
 
 
+class TestAuditTrail(unittest.TestCase):
+    """P2-K：归档/审签写审计；详情带留痕时间线；审计查询仅质控科。"""
+
+    def _audit_count(self, action, target):
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action=? AND target=?",
+                         (action, target)).fetchone()[0]
+        conn.close()
+        return n
+
+    def test_submit_and_review_write_audit(self):
+        rid, rec_no = submit()
+        self.assertEqual(self._audit_count("archive_submit", rec_no), 1)
+        h = make_handler(f"/records/detail?id={rid}")
+        records.do_review(h, {"id": rid, "action": "sign", "comment": "同意签发"}, ATT)
+        self.assertEqual(h.response[0], 200)
+        self.assertEqual(self._audit_count("review_sign", rec_no), 1)
+        # 详情返回审计时间线（含归档与审签两条）
+        h2 = make_handler(f"/records/detail?id={rid}")
+        records.do_detail(h2, ATT, {"id": str(rid)})
+        audit = h2.response[1]["record"]["audit"]
+        actions = {a["action"] for a in audit}
+        self.assertIn("archive_submit", actions)
+        self.assertIn("review_sign", actions)
+
+    def test_audit_query_qc_only(self):
+        h = make_handler("/records/audit")
+        records.do_audit(h, RES, {})
+        self.assertEqual(h.response[0], 403)      # 住院医师不可查
+        submit()                                   # 本类先于 TestSubmit 执行，先造一条归档审计
+        h2 = make_handler("/records/audit")
+        records.do_audit(h2, QC, {})
+        self.assertEqual(h2.response[0], 200)
+        self.assertTrue(any(r["action"] == "archive_submit" for r in h2.response[1]["records"]))
+
+
 if __name__ == "__main__":
     unittest.main()

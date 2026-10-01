@@ -11,9 +11,11 @@ AI 病历智能体 · 用户认证与会话（登录 / 注册 / 新手引导标�
   - 密码 PBKDF2-HMAC-SHA256（200k 轮）+ 每用户 16 字节随机盐，库中不存明文
   - 会话令牌 32 字节随机（secrets），HttpOnly Cookie，7 天有效，服务端可注销
   - 全部查询参数化，防 SQL 注入；输入做长度/格式白名单校验
+  - 登录防爆破：15 分钟窗口内连续失败 5 次锁定 15 分钟（内存态，单进程部署）
+  - 审计留痕（P2-K）：关键操作只追加写入 audit_log（audit_log 函数），失败不阻断业务
 Cookie 注意：演示环境为 HTTP，故不带 Secure 属性；若上 HTTPS 部署请加上。
 """
-import hashlib, json, os, re, secrets, sqlite3, sys, time
+import hashlib, json, os, re, secrets, sqlite3, sys, threading, time
 from datetime import datetime
 
 SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -62,6 +64,18 @@ _DDL_MYSQL = [
         expires_at DATETIME NOT NULL,
         KEY idx_uid (user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS audit_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        user_id INT NULL,
+        username VARCHAR(32) DEFAULT '',
+        name VARCHAR(64) DEFAULT '',
+        role VARCHAR(16) DEFAULT '',
+        action VARCHAR(32) NOT NULL,
+        target VARCHAR(128) DEFAULT '',
+        detail VARCHAR(512) DEFAULT '',
+        KEY idx_ts (ts), KEY idx_action (action)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
 ]
 _DDL_SQLITE = [
     """CREATE TABLE IF NOT EXISTS users (
@@ -74,6 +88,12 @@ _DDL_SQLITE = [
     """CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER,
+        username TEXT DEFAULT '', name TEXT DEFAULT '', role TEXT DEFAULT '',
+        action TEXT NOT NULL, target TEXT DEFAULT '', detail TEXT DEFAULT '')""",
 ]
 
 _ACTIVE_SQLITE = SQLITE_PATH  # 实际生效的 SQLite 路径（目录不可写时自动降级到 /tmp）
@@ -184,6 +204,65 @@ def _public_user(u):
             "role": u.get("role") or "resident", "role_name": ROLE_NAMES.get(u.get("role") or "resident", "住院医师"),
             "tour_done": bool(u.get("tour_done"))}
 
+# ---------------- 审计留痕（P2-K：只追加，失败不阻断业务主流程） ----------------
+def audit_log(user, action, target="", detail=""):
+    """关键操作审计写入。user 为登录用户 dict（可为 None=未登录事件，如登录失败）。
+   绝不抛异常：审计属旁路，写失败仅告警，不影响登录/审签等主流程。"""
+    try:
+        u = user or {}
+        conn = _connect()
+        try:
+            q = "%s" if BACKEND == "mysql" else "?"
+            conn.cursor().execute(
+                f"INSERT INTO audit_log (user_id, username, name, role, action, target, detail) "
+                f"VALUES ({q},{q},{q},{q},{q},{q},{q})",
+                (u.get("id"), str(u.get("username") or "")[:32], str(u.get("name") or "")[:64],
+                 str(u.get("role") or "")[:16], str(action)[:32], str(target)[:128], str(detail)[:512]))
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[auth] 审计写入失败（action={action}）: {e}", file=sys.stderr)
+
+# ---------------- 登录防爆破（内存态：单进程部署；多副本部署需改为 DB 计数） ----------------
+LOGIN_MAX_FAILS = 5
+LOGIN_WINDOW_SECONDS = 900   # 失败计数窗口 15 分钟
+LOGIN_LOCK_SECONDS = 900     # 触发后锁定 15 分钟
+_login_state = {}
+_login_gate = threading.Lock()
+
+def _login_gate_check(username):
+    """允许登录返回 (True, None)；锁定中返回 (False, 提示语)。"""
+    with _login_gate:
+        st = _login_state.get(username)
+        if not st:
+            return True, None
+        now = time.time()
+        if st.get("locked_until"):
+            if now < st["locked_until"]:
+                mins = int((st["locked_until"] - now) // 60) + 1
+                return False, f"登录失败次数过多，账号已临时锁定，请约 {mins} 分钟后再试"
+            _login_state.pop(username, None)   # 锁定期满自动解除
+        elif now - st.get("first", now) > LOGIN_WINDOW_SECONDS:
+            _login_state.pop(username, None)   # 失败窗口过期，重新计数
+        return True, None
+
+def _login_gate_fail(username):
+    """记一次失败；返回 True 表示本次触发锁定。"""
+    with _login_gate:
+        now = time.time()
+        st = _login_state.setdefault(username, {"fails": 0, "first": now})
+        if now - st["first"] > LOGIN_WINDOW_SECONDS:
+            st.update(fails=0, first=now)
+        st["fails"] += 1
+        if st["fails"] >= LOGIN_MAX_FAILS:
+            st["locked_until"] = now + LOGIN_LOCK_SECONDS
+            return True
+        return False
+
+def _login_gate_ok(username):
+    with _login_gate:
+        _login_state.pop(username, None)
+
 # ---------------- 校验 ----------------
 def _validate_register(body):
     username = str(body.get("username") or "").strip()
@@ -244,11 +323,16 @@ def do_register(handler, body):
     user = {"id": uid, "username": data["username"], "name": data["name"],
             "department": data["department"], "title": data["title"],
             "role": data["role"], "role_name": ROLE_NAMES[data["role"]], "tour_done": False}
+    audit_log(user, "register", target=data["username"], detail=f"角色 {ROLE_NAMES[data['role']]}")
     handler._json(200, {"ok": True, "user": user}, set_cookies=[_session_cookie(token)])
 
 def do_login(handler, body):
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
+    if username:
+        ok, err = _login_gate_check(username)
+        if not ok:
+            return handler._json(429, {"error": err})
     conn = _connect()
     try:
         q = "%s" if BACKEND == "mysql" else "?"
@@ -259,7 +343,11 @@ def do_login(handler, body):
         conn.close()
     u = rows[0] if rows else None
     if not u or _hash_pwd(password, u["salt"]) != u["pwd_hash"]:
+        locked = _login_gate_fail(username) if username else False
+        audit_log(None, "login_fail", target=username[:32],
+                  detail="触发临时锁定" if locked else "用户名或口令不符")
         return handler._json(401, {"error": "用户名或密码错误"})
+    _login_gate_ok(username)
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect()
     try:
@@ -268,6 +356,7 @@ def do_login(handler, body):
     finally:
         conn.close()
     token = _create_session(u["id"])
+    audit_log(u, "login", target=username[:32])
     handler._json(200, {"ok": True, "user": _public_user(u)}, set_cookies=[_session_cookie(token)])
 
 def do_logout(handler, body):

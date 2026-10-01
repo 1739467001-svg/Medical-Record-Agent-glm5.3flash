@@ -63,5 +63,70 @@ class TestSqliteRoleMigration(unittest.TestCase):
         conn.close()
 
 
+class TestLoginGateAndAudit(unittest.TestCase):
+    """P2-K：登录防爆破（连续失败锁定）+ 关键操作审计留痕。"""
+
+    def setUp(self):
+        self._old_active = auth._ACTIVE_SQLITE   # 用例结束恢复，避免污染其他模块的临时库
+        tmp = tempfile.mkdtemp(prefix="mra_gate_")
+        auth._ACTIVE_SQLITE = os.path.join(tmp, "t.db")
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        cur = conn.cursor()
+        for ddl in auth._DDL_SQLITE:
+            cur.execute(ddl)
+        auth._migrate_role_column(cur, mysql=False)   # role 列由迁移补齐（与 init_db 一致）
+        conn.commit()
+        conn.close()
+        auth._login_state.clear()
+
+    def tearDown(self):
+        auth._ACTIVE_SQLITE = self._old_active
+        auth._login_state.clear()
+
+    def _attempt(self, username, password):
+        class H:
+            def __init__(self): self.resp = None
+            def _json(self, code, obj, set_cookies=None): self.resp = (code, obj)
+        h = H()
+        auth.do_login(h, {"username": username, "password": password})
+        return h.resp
+
+    def _audit_count(self, action):
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action=?", (action,)).fetchone()[0]
+        conn.close()
+        return n
+
+    def test_lockout_after_max_fails(self):
+        for i in range(auth.LOGIN_MAX_FAILS):
+            code, _ = self._attempt("ghost_user", "wrong")
+            self.assertEqual(code, 401)   # 锁定前一律 401（不暴露账号存在性）
+        code, obj = self._attempt("ghost_user", "wrong")
+        self.assertEqual(code, 429)       # 达到阈值后锁定
+        self.assertIn("锁定", obj["error"])
+        # 解除锁定后恢复（401 而非 429）
+        auth._login_gate_ok("ghost_user")
+        code, _ = self._attempt("ghost_user", "wrong")
+        self.assertEqual(code, 401)
+
+    def test_audit_rows_written(self):
+        self._attempt("ghost_user", "wrong")           # 登录失败 → login_fail
+        class H:
+            def __init__(self): self.resp = None
+            def _json(self, code, obj, set_cookies=None): self.resp = (code, obj)
+        h = H()
+        auth.do_register(h, {"username": "audit_doc", "password": "123456", "name": "审医生"})
+        self.assertEqual(h.resp[0], 200)               # 注册成功
+        self._attempt("audit_doc", "123456")           # 登录成功 → login
+        self.assertGreaterEqual(self._audit_count("login_fail"), 1)
+        self.assertGreaterEqual(self._audit_count("register"), 1)
+        self.assertGreaterEqual(self._audit_count("login"), 1)
+        # 审计只追加：字段不含口令明文
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        row = conn.execute("SELECT detail FROM audit_log WHERE action='register'").fetchone()
+        conn.close()
+        self.assertNotIn("123456", (row[0] or ""))
+
+
 if __name__ == "__main__":
     unittest.main()

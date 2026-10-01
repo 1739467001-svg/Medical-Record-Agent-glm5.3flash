@@ -1172,8 +1172,15 @@ const RV_STATUS = {
   rejected:  { name: "已退回", bg: "#fdeceb", fg: "var(--red)", line: "#f2c4bd" }
 };
 const RV_SPOT = { ok: { name: "抽查合格", fg: "var(--green)" }, issue: { name: "抽查缺陷", fg: "var(--red)" } };
+const AUDIT_ACTION = {
+  login: "登录", login_fail: "登录失败", register: "注册",
+  archive_submit: "提交归档", review_sign: "审签·签发", review_reject: "审签·退回",
+  spotcheck: "质控抽查", generate_draft: "生成草稿", generate_summary: "生成摘要",
+  asr_transcribe: "录音转写"
+};
+const AUDIT_ROLE = { resident: "住院医师", attending: "上级医师", qc: "质控科" };
 let rvFilter = "";
-let rvView = "list";   // 审签工作台视图：list=文书列表 / edits=修改回流（F8）
+let rvView = "list";   // 审签工作台视图：list=文书列表 / edits=修改回流（F8）/ audit=审计日志（仅质控科）
 
 function viewReview(){
   if (!S.user){ location.hash = "#/login"; return; }
@@ -1183,7 +1190,8 @@ function viewReview(){
     : "";
   const tabs = ["", "submitted", "signed", "rejected"].map(s =>
     `<a class="rv-tab ${rvView === "list" && rvFilter === s ? "on" : ""}" onclick="rvSetFilter('${s}')">${s ? RV_STATUS[s].name : "全部"} </a>`).join("")
-    + `<a class="rv-tab ${rvView === "edits" ? "on" : ""}" onclick="rvSetView('edits')">🔄 修改回流</a>`;
+    + `<a class="rv-tab ${rvView === "edits" ? "on" : ""}" onclick="rvSetView('edits')">🔄 修改回流</a>`
+    + (role === "qc" ? `<a class="rv-tab ${rvView === "audit" ? "on" : ""}" onclick="rvSetView('audit')">🛡 审计日志</a>` : "");
   $app.innerHTML = `
     <div class="page-head">
       <div class="page-title">审签工作台<small>${
@@ -1196,7 +1204,9 @@ function viewReview(){
     <div id="rv-body" style="${S.user.demo ? "display:none" : ""}">
       <div class="rv-tabs">${tabs}</div>
       ${rvView === "edits" ? `
-      <div id="rv-edits" style="text-align:center;padding:28px;color:var(--ink-3)">加载修改回流…</div>` : `
+      <div id="rv-edits" style="text-align:center;padding:28px;color:var(--ink-3)">加载修改回流…</div>` :
+      rvView === "audit" ? `
+      <div id="rv-audit" style="text-align:center;padding:28px;color:var(--ink-3)">加载审计日志…</div>` : `
       <div id="rv-stats" class="rv-stats"></div>
       <div class="card" style="padding:0;overflow:hidden">
         <table class="fm rv-table">
@@ -1207,6 +1217,7 @@ function viewReview(){
     </div>`;
   if (!S.user.demo){
     if (rvView === "edits") loadReviewEdits();
+    else if (rvView === "audit") loadAuditList();
     else loadReviewList();
   }
 }
@@ -1384,6 +1395,8 @@ async function openReviewDetail(id){
           ${rec.spot_result && rec.spot_comment ? `<div class="src-pop" style="margin-bottom:14px">🔍 <b>抽查意见：</b>${esc(rec.spot_comment)}——${esc(rec.spot_by || "质控科")}</div>` : ""}
           ${qc.summary ? `<div class="rv-qc"><b>机器质控结论：</b>${esc(qc.summary)}${(qc.warnings || []).length ? "<br>⚠ " + qc.warnings.map(w => esc(w)).join("<br>⚠ ") : ""}${(qc.missing || []).length ? `<br>缺失待补：${qc.missing.map(m => esc(m)).join("、")}` : ""}</div>` : ""}
           ${(rec.edits || []).length ? `<div class="rv-qc">✎ <b>医生修改留痕 ${rec.edits.length} 处</b>：${rec.edits.slice(0, 5).map(e => `${esc(e.field || "")}「${esc(String(e.before || "").slice(0, 20))}」→「${esc(String(e.after || "").slice(0, 20))}」`).join("；")}${rec.edits.length > 5 ? " …" : ""}</div>` : ""}
+          ${(rec.audit || []).length ? `<div class="rv-qc">🕘 <b>操作留痕（本文书相关审计）</b><br>${rec.audit.map(a =>
+            `${esc((a.ts || "").slice(0, 16))} · ${esc(a.name || a.username || "—")}${a.role ? "（" + esc(AUDIT_ROLE[a.role] || a.role) + "）" : ""} · ${esc(AUDIT_ACTION[a.action] || a.action)}${a.detail ? " · " + esc(String(a.detail).slice(0, 60)) : ""}`).join("<br>")}</div>` : ""}
           <div class="md-title" style="font-size:14px;margin:6px 0 2px">字段明细（四色）</div>
           ${fieldRows}
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
@@ -1424,6 +1437,35 @@ async function spotAction(id, result){
   closeModal();
   alert(result === "ok" ? "✓ 已标记抽查合格" : "🔍 已标记抽查缺陷");
   loadReviewList();
+}
+/* 审计日志（P2-K，仅质控科）：登录/生成/归档/审签/抽查全留痕，时间倒序 */
+async function loadAuditList(){
+  const el = document.getElementById("rv-audit");
+  if (!el) return;
+  try{
+    const r = await fetch("api/records/audit?limit=200");
+    if (r.status === 401){ S.user = null; renderUserArea(); location.hash = "#/login"; return; }
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "加载失败");
+    const rows = d.records || [];
+    el.innerHTML = rows.length ? `
+      <div class="card" style="padding:0;overflow:hidden">
+      <table class="fm rv-table">
+        <thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>详情</th></tr></thead>
+        <tbody>${rows.map(a => `
+          <tr>
+            <td style="color:var(--ink-3)">${esc((a.ts || "").slice(0, 19))}</td>
+            <td>${esc(a.name || a.username || "—")}${a.role ? `<span style="color:var(--ink-3)"> · ${esc(AUDIT_ROLE[a.role] || a.role)}</span>` : ""}</td>
+            <td><span class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)">${esc(AUDIT_ACTION[a.action] || a.action)}</span></td>
+            <td class="mono" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.target || "—")}</td>
+            <td style="color:var(--ink-2);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.detail || "—")}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>
+      <div style="margin-top:10px;color:var(--ink-3);font-size:12px">共显示最近 ${rows.length} 条 · 覆盖登录、草稿生成、提交归档、审签、抽查等关键操作 · 只追加不可篡改</div>`
+      : `<div style="padding:28px;text-align:center;color:var(--ink-3)">暂无审计记录——登录、生成、归档、审签、抽查等关键操作将自动留痕</div>`;
+  } catch (e) {
+    el.innerHTML = `<div style="padding:28px;text-align:center;color:var(--red)">${esc(e.message)}</div>`;
+  }
 }
 
 /* ================================================================ */
@@ -1489,7 +1531,9 @@ function viewManual(){
       <h2>四、归档之后：审签、质控与导出</h2>
       <ul>
         <li><b>提交后发生什么</b>：归档包进入审签流——<b>上级医师</b>在「审签」页逐字段核查后签发或退回（退回原因会回流给你，修改后重新提交即生成新归档编号）；<b>质控科</b>另行抽查并标记合格/缺陷。</li>
-        <li><b>在哪里看进度</b>：工作台右上角登录后，顶栏「审签」进入审签工作台——住院医师看本人文书的审签/退回状态，上级医师与质控科处置各自职责。</li>
+        <li><b>在哪里看进度</b>：上级医师/质控科登录后，工作台顶部有「审签待办」提醒卡（待审签/已退回数量）；顶栏「审签」进入审签工作台——住院医师看本人文书的审签/退回状态，上级医师与质控科处置各自职责。</li>
+        <li><b>修改回流</b>：审签工作台「🔄 修改回流」页签汇总医生修改热点（按四色来源归类，附改前改后样例），供科室复盘与 AI 模型迭代；可下载 JSON 回流包。</li>
+        <li><b>全程留痕</b>：登录、草稿生成、提交归档、审签、抽查全部自动写入审计日志（只追加不可篡改）；质控科可在审签工作台「🛡 审计日志」页签按时间倒序查阅，每份文书的详情弹窗内也附本文书相关留痕。</li>
         <li><b>打印 / 存 PDF</b>：四色确认页与归档页均有「🖨 打印 / 存 PDF」，输出干净的病历文书版式（隐藏系统界面），浏览器打印对话框里"另存为 PDF"即可；正式归档仍以 XML 回填包回写院内系统为准。</li>
         <li><b>台账导出</b>：审签工作台「⬇ 导出台账 CSV」可导出归档清单（编号/医生/审签状态/抽查结果等 13 列，Excel 直开），供科室质控例会与病案统计使用。</li>
       </ul>

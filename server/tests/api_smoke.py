@@ -114,7 +114,21 @@ def main():
         hot = {x["label"]: x["color"] for x in d.get("hot", [])}
         check("修改回流聚合（主诉=绿）", code == 200 and hot.get("主诉") == "green")
 
-        print("[6] 未配置 LLM 的降级与未登录拦截")
+        print("[6] 审计留痕（P2-K）")
+        req("POST", "/auth/logout")
+        req("POST", "/auth/login", {"username": "smoke_res", "password": "smoke123"})
+        code, d = req("GET", "/records/audit")
+        check("住院医师查审计 → 403", code == 403)
+        req("POST", "/auth/logout")
+        req("POST", "/auth/login", {"username": "smoke_qc", "password": "smoke123"})
+        code, d = req("GET", "/records/audit?limit=200")
+        acts = {r["action"] for r in d.get("records", [])}
+        check("质控查审计含注册/登录/归档/审签/抽查", code == 200 and
+              {"register", "login", "archive_submit", "review_sign", "spotcheck"} <= acts)
+        code, d = req("GET", f"/records/detail?id={rid}")
+        check("详情附操作留痕时间线", code == 200 and len(d["record"].get("audit") or []) >= 2)
+
+        print("[7] 未配置 LLM 的降级与未登录拦截")
         code, d = req("POST", "/generate-summary", {"code": "DA0001", "admission": 1})
         check("generate-summary → 503（LLM 未配置）", code == 503)
         code, d = req("POST", "/generate-draft", {"code": "DA0001", "admission": 1, "doc": "入院记录"})

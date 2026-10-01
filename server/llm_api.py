@@ -207,10 +207,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._json(400, {"error": f"请求体解析失败: {e}"})
         if path == "/generate-summary":
+            u = auth._user_by_token(self.cookies.get(auth.SESSION_COOKIE))
             try:
                 prompt, err = build_prompt(str(body.get("code", "")), int(body.get("admission", 0) or 0))
                 if err: return self._json(400, {"error": err})
                 summary = call_llm(prompt)
+                if u:
+                    auth.audit_log(u, "generate_summary", str(body.get("code") or "")[:32],
+                                   f"住院次{body.get('admission')}·患者全景摘要")
                 return self._json(200, {"code": body.get("code"), "admission": body.get("admission"),
                                         "summary": summary, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
             except Exception as e:
@@ -251,6 +255,8 @@ class Handler(BaseHTTPRequestHandler):
             engine = asr_mcp_server.pick_engine(None)
             t = engine.transcribe(tmp, speakers=bool(body.get("speakers", True)))
             d = t.to_dict()
+            auth.audit_log(u, "asr_transcribe", filename,
+                           f"engine={d['engine']}·时长{d.get('duration_sec') or '?'}s·{len(d.get('segments') or [])}段")
             return self._json(200, {"ok": True, "engine": d["engine"], "text": d["text"],
                                     "segments": d["segments"], "duration_sec": d.get("duration_sec"),
                                     "mock": bool(d.get("mock")), "warnings": d.get("warnings") or [],
@@ -270,6 +276,11 @@ class Handler(BaseHTTPRequestHandler):
         adm = p["admissions"][adm_idx - 1] if p and 0 < adm_idx <= len(p["admissions"]) else None
         if not adm:
             return self._json(400, {"error": "患者或住院次不存在"})
+        # 审计留痕（P2-K）：登录医生的草稿生成入审计；未登录=演示模式，不入库
+        u = auth._user_by_token(self.cookies.get(auth.SESSION_COOKIE))
+        if u:
+            auth.audit_log(u, "generate_draft", f"{code}/{doc_type}",
+                           f"住院次{adm_idx}" + ("·含转写稿" if transcript else "·无录音模式"))
         # 文书定位：type 精确匹配 → 病程记录类按标题匹配（如"首次病程记录"）
         doc = next((d for d in adm["docs"] if d["type"] == doc_type), None) \
             or next((d for d in adm["docs"] if d["type"] == "病程记录" and doc_type in d.get("title", "")), None)

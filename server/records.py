@@ -17,6 +17,14 @@ STATUS_NAMES = {"submitted": "待上级医师审签", "signed": "已审签", "re
 SPOT_NAMES = {"ok": "抽查合格", "issue": "抽查缺陷", "": "未抽查"}
 Q = "%s" if auth.BACKEND == "mysql" else "?"
 
+# 审计动作中文名（P2-K 审计留痕；与 auth.audit_log 写入的 action 对应）
+AUDIT_ACTION_NAMES = {
+    "login": "登录", "login_fail": "登录失败", "register": "注册",
+    "archive_submit": "提交归档", "review_sign": "审签·签发", "review_reject": "审签·退回",
+    "spotcheck": "质控抽查", "generate_draft": "生成草稿", "generate_summary": "生成摘要",
+    "asr_transcribe": "录音转写",
+}
+
 
 def init_db():
     ddl_mysql = """CREATE TABLE IF NOT EXISTS archives (
@@ -226,6 +234,7 @@ def handle(handler, body, path_override=None):
         ("GET", "/"): lambda: do_list(handler, u, _qs(handler.path)),
         ("GET", "/detail"): lambda: do_detail(handler, u, _qs(handler.path)),
         ("GET", "/edits"): lambda: do_edits(handler, u, _qs(handler.path)),
+        ("GET", "/audit"): lambda: do_audit(handler, u, _qs(handler.path)),
         ("POST", "/review"): lambda: do_review(handler, body, u),
         ("POST", "/spotcheck"): lambda: do_spotcheck(handler, body, u),
     }
@@ -274,6 +283,8 @@ def do_submit(handler, body, u):
         rid = cur.lastrowid
     finally:
         conn.close()
+    auth.audit_log(u, "archive_submit", rec_no,
+                   f"{rec['doc']}·{rec['disease'] or '—'}·字段 {rec['total']}（黄 {rec['yellow']}）")
     handler._json(200, {"ok": True, "id": rid, "record_no": rec_no, "status": "submitted",
                         "status_name": STATUS_NAMES["submitted"],
                         "resident": u.get("name") or u["username"]})
@@ -313,6 +324,12 @@ def do_detail(handler, u, qs):
         cur = conn.cursor()
         cur.execute(f"SELECT * FROM archives WHERE id={Q}", (rid,))
         rows = auth._rows(cur)
+        if rows:
+            cur.execute(f"SELECT ts, username, name, role, action, detail FROM audit_log "
+                        f"WHERE target={Q} ORDER BY id DESC LIMIT 20", (rows[0]["record_no"],))
+            audit_rows = auth._rows(cur)
+        else:
+            audit_rows = []
     finally:
         conn.close()
     if not rows:
@@ -321,6 +338,9 @@ def do_detail(handler, u, qs):
     if u.get("role") not in ("attending", "qc") and r["resident_id"] != u["id"]:
         return handler._json(403, {"error": "无权查看他人文书"})
     d = _row_brief(r)
+    for a in audit_rows:
+        a["action_name"] = AUDIT_ACTION_NAMES.get(a["action"], a["action"])
+    d["audit"] = audit_rows
     try:
         d["fields"] = json.loads(r["fields_json"])
     except Exception:
@@ -355,17 +375,20 @@ def do_review(handler, body, u):
     conn = auth._connect()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT status FROM archives WHERE id={Q}", (rid,))
+        cur.execute(f"SELECT status, record_no FROM archives WHERE id={Q}", (rid,))
         rows = auth._rows(cur)
         if not rows:
             return handler._json(404, {"error": "文书不存在"})
         if rows[0]["status"] != "submitted":
             return handler._json(409, {"error": f"该文书当前状态为「{STATUS_NAMES.get(rows[0]['status'])}」，不可重复审签"})
+        rec_no = rows[0]["record_no"]
         name = (u.get("name") or u["username"]) + "（上级医师审签）"
         cur.execute(f"UPDATE archives SET status={Q}, signed_name={Q}, signed_at={Q}, sign_comment={Q} WHERE id={Q}",
                     (status, name, _now(), comment, rid))
     finally:
         conn.close()
+    auth.audit_log(u, "review_sign" if action == "sign" else "review_reject", rec_no,
+                   comment[:200] or ("签发" if action == "sign" else "退回（未填原因）"))
     handler._json(200, {"ok": True, "id": rid, "status": status, "status_name": STATUS_NAMES[status],
                         "signed_name": name})
 
@@ -385,12 +408,43 @@ def do_spotcheck(handler, body, u):
     conn = auth._connect()
     try:
         cur = conn.cursor()
+        cur.execute(f"SELECT record_no FROM archives WHERE id={Q}", (rid,))
+        rows = auth._rows(cur)
+        if not rows:
+            return handler._json(404, {"error": "文书不存在"})
+        rec_no = rows[0]["record_no"]
         name = (u.get("name") or u["username"]) + "（质控科抽查）"
         cur.execute(f"UPDATE archives SET spot_result={Q}, spot_comment={Q}, spot_name={Q}, spot_at={Q} WHERE id={Q}",
                     (result, comment, name, _now(), rid))
     finally:
         conn.close()
+    auth.audit_log(u, "spotcheck", rec_no, f"{SPOT_NAMES[result]}{('·' + comment[:160]) if comment else ''}")
     handler._json(200, {"ok": True, "id": rid, "spot_result": result, "spot_name_str": SPOT_NAMES[result]})
+
+
+def do_audit(handler, u, qs):
+    """审计日志查询（P2-K）：仅质控科。支持 action 筛选与 limit（默认 100，上限 500）。"""
+    if u.get("role") != "qc":
+        return handler._json(403, {"error": "审计日志仅质控科可查（医务合规职能）"})
+    try:
+        limit = min(max(int(qs.get("limit") or 100), 1), 500)
+    except ValueError:
+        limit = 100
+    action = (qs.get("action") or "").strip()[:32]
+    where, args = "", []
+    if action:
+        where = f"WHERE action={Q}"
+        args.append(action)
+    conn = auth._connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT {limit}", tuple(args))
+        rows = auth._rows(cur)
+    finally:
+        conn.close()
+    for r in rows:
+        r["action_name"] = AUDIT_ACTION_NAMES.get(r["action"], r["action"])
+    handler._json(200, {"ok": True, "records": rows, "action_names": AUDIT_ACTION_NAMES})
 
 
 try:
