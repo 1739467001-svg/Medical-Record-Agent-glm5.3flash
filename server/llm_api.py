@@ -27,7 +27,7 @@ for _p in _MCP_CANDIDATES:
     if _p and os.path.isfile(os.path.join(_p, "asr_mcp_server.py")):
         sys.path.insert(0, _p)
         break
-from agents import run_pipeline, aggregator  # noqa: E402
+from agents import run_pipeline  # noqa: E402
 import auth  # noqa: E402  登录/注册/会话（server/auth.py）
 import records  # noqa: E402  归档与审签流（server/records.py，P2-G）
 try:

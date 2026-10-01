@@ -81,8 +81,9 @@ _DX_RULE = ("初步诊断/出院诊断：只依据【结构化数据】的申请
 
 def generate(elements, dataset, knowledge, doc_type="入院记录", target_labels=None):
     """返回 (draft_fields, trace)。target_labels：模板字段标签集（来自字段地图，非答案）。
-    LLM 只负责 4 类字段：主诉、现病史叙述、初步/出院诊断、辅助检查结果；
-    其余蓝/灰由规则精准产出。"""
+    字段分工：病史类（主诉/现病史等）仅在对话素材存在时由 LLM 产出（无素材硬拦截）；
+    诊断由申请单规范改写产出（LLM 筛选规范 + 规则直填兜底）；辅助检查 LLM 整理；
+    体征蓝源直填、模板常规灰源注入。"""
     t0 = time.time()
     draft = []
     warnings = []
