@@ -44,6 +44,13 @@ cd server && python3 -m unittest discover -s tests
 # API 冒烟测试（HTTP 层端到端，21 项：起真实服务进程 → 路由/前缀剥离/会话/
 # 审签流/角色越权/限流/LLM 未配置降级/审计查询；临时 SQLite 隔离，无密钥也可跑）
 python3 server/tests/api_smoke.py
+
+# 一键仓库体检（P2-L，12 项：Python 编译/JS 语法/前后端 API 契约/onclick 引用/
+# 红线文件不入 Git/疑似密钥扫描/README 数字与实测一致/运行环境；--fast 跳过实测）
+python3 tools/check_repo.py
+
+# 演示动线与降级预案（院方汇报用，docs/）
+# docs/演示脚本_5分钟.md —— 预检清单 → 5 分钟动线 → 量化结论 → 降级预案 → Q&A
 ```
 
 ## 核心设计（详见 PRD）
