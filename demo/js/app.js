@@ -1176,7 +1176,7 @@ const AUDIT_ACTION = {
   login: "登录", login_fail: "登录失败", register: "注册",
   archive_submit: "提交归档", review_sign: "审签·签发", review_reject: "审签·退回",
   spotcheck: "质控抽查", generate_draft: "生成草稿", generate_summary: "生成摘要",
-  asr_transcribe: "录音转写"
+  asr_transcribe: "录音转写", export_archive: "导出归档包"
 };
 const AUDIT_ROLE = { resident: "住院医师", attending: "上级医师", qc: "质控科" };
 let rvFilter = "";
@@ -1404,6 +1404,7 @@ async function openReviewDetail(id){
             <button class="btn" style="border-color:var(--yellow-line);color:var(--yellow)" onclick="reviewAction(${rec.id}, 'reject')">↩ 退回修改</button>` : ""}
             ${canSpot ? `<button class="btn primary" onclick="spotAction(${rec.id}, 'ok')">🔍 抽查合格</button>
             <button class="btn" style="border-color:#f2c4bd;color:var(--red)" onclick="spotAction(${rec.id}, 'issue')">🔍 标记缺陷</button>` : ""}
+            <button class="btn" onclick="downloadArchive(${rec.id}, '${esc(rec.record_no)}')">⬇ 下载归档包（JSON·HIS 对接）</button>
             <button class="btn ghost" onclick="closeModal()">关闭</button>
           </div>
         </div>
@@ -1438,6 +1439,20 @@ async function spotAction(id, result){
   alert(result === "ok" ? "✓ 已标记抽查合格" : "🔍 已标记抽查缺陷");
   loadReviewList();
 }
+/* 归档包导出（P3 HIS 对接前置）：完整 JSON 包（元数据+四色字段+QC+修改留痕+XML 回填） */
+async function downloadArchive(id, recordNo){
+  try{
+    const r = await fetch("api/records/export?id=" + id);
+    if (!r.ok){ const d = await r.json().catch(() => ({})); throw new Error(d.error || "导出失败"); }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (recordNo || "archive") + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  } catch (e) { alert("归档包导出失败：" + e.message); }
+}
+
 /* 审计日志（P2-K，仅质控科）：登录/生成/归档/审签/抽查全留痕，时间倒序 */
 async function loadAuditList(){
   const el = document.getElementById("rv-audit");

@@ -36,18 +36,25 @@ python3 evaluation/run_regression.py
 # ASR MCP 服务器自测（mock 引擎，无需密钥）
 python3 mcp-server/test_client.py
 
-# 后端单元测试（零依赖 unittest，31 项：规范用语改写/无素材拦截/QC 回流/
-# 审签状态机/角色权限/修改回流聚合/老库迁移/登录防爆破/审计留痕；
+# 后端单元测试（零依赖 unittest，33 项：规范用语改写/无素材拦截/QC 回流/
+# 审签状态机/角色权限/修改回流聚合/老库迁移/登录防爆破/审计留痕/归档包导出；
 # 临时 SQLite，不触碰研发数据）
 cd server && python3 -m unittest discover -s tests
 
-# API 冒烟测试（HTTP 层端到端，21 项：起真实服务进程 → 路由/前缀剥离/会话/
-# 审签流/角色越权/限流/LLM 未配置降级/审计查询；临时 SQLite 隔离，无密钥也可跑）
+# API 冒烟测试（HTTP 层端到端，22 项：起真实服务进程 → 路由/前缀剥离/会话/
+# 审签流/归档包导出/角色越权/限流/LLM 未配置降级/审计查询；临时库隔离）
 python3 server/tests/api_smoke.py
 
 # 一键仓库体检（P2-L，12 项：Python 编译/JS 语法/前后端 API 契约/onclick 引用/
 # 红线文件不入 Git/疑似密钥扫描/README 数字与实测一致/运行环境；--fast 跳过实测）
 python3 tools/check_repo.py
+
+# 录音数据接入（P2-M，录音 Runbook 第 1-3 步自动化；仅限 git 忽略目录，真实录音/转写稿永不入库）
+python3 tools/asr_ingest.py 病历资料/录音 --validate      # 落位校验：格式/命名 → 落位报告.md（无需密钥）
+python3 tools/asr_ingest.py 病历资料/录音 --transcribe    # 批量转写（需 .llm_env 中 ASR_* 密钥）
+
+# 评测趋势汇总（P2-M）：历次回归报告 → 覆盖率/准确率跨期对照表（双周汇报用）
+python3 evaluation/trend_report.py
 
 # 演示动线与降级预案（院方汇报用，docs/）
 # docs/演示脚本_5分钟.md —— 预检清单 → 5 分钟动线 → 量化结论 → 降级预案 → Q&A

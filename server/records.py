@@ -22,7 +22,7 @@ AUDIT_ACTION_NAMES = {
     "login": "登录", "login_fail": "登录失败", "register": "注册",
     "archive_submit": "提交归档", "review_sign": "审签·签发", "review_reject": "审签·退回",
     "spotcheck": "质控抽查", "generate_draft": "生成草稿", "generate_summary": "生成摘要",
-    "asr_transcribe": "录音转写",
+    "asr_transcribe": "录音转写", "export_archive": "导出归档包",
 }
 
 
@@ -235,6 +235,7 @@ def handle(handler, body, path_override=None):
         ("GET", "/detail"): lambda: do_detail(handler, u, _qs(handler.path)),
         ("GET", "/edits"): lambda: do_edits(handler, u, _qs(handler.path)),
         ("GET", "/audit"): lambda: do_audit(handler, u, _qs(handler.path)),
+        ("GET", "/export"): lambda: do_export(handler, u, _qs(handler.path)),
         ("POST", "/review"): lambda: do_review(handler, body, u),
         ("POST", "/spotcheck"): lambda: do_spotcheck(handler, body, u),
     }
@@ -355,6 +356,61 @@ def do_detail(handler, u, qs):
         d["edits"] = []
     d["spot_by"] = r["spot_name"] or ""
     handler._json(200, {"ok": True, "record": d})
+
+
+def do_export(handler, u, qs):
+    """归档包导出（P3 HIS 回写对接前置）：完整 JSON 包（元数据+四色字段+QC+修改留痕+XML 回填），
+    以附件下载。权限同详情：attending/qc 全量，resident 仅本人。调用写审计。"""
+    try:
+        rid = int(qs.get("id") or 0)
+    except ValueError:
+        return handler._json(400, {"error": "参数错误"})
+    conn = auth._connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM archives WHERE id={Q}", (rid,))
+        rows = auth._rows(cur)
+    finally:
+        conn.close()
+    if not rows:
+        return handler._json(404, {"error": "文书不存在"})
+    r = rows[0]
+    if u.get("role") not in ("attending", "qc") and r["resident_id"] != u["id"]:
+        return handler._json(403, {"error": "无权导出他人文书"})
+    try:
+        fields = json.loads(r["fields_json"])
+    except Exception:
+        fields = []
+    try:
+        qc = json.loads(r["qc_json"] or "{}")
+    except Exception:
+        qc = {}
+    try:
+        edits = json.loads(r["edits_json"] or "[]")
+    except Exception:
+        edits = []
+    package = {
+        "format": "mra-archive-v1",   # HIS 对接层按此版本号解析
+        "record_no": r["record_no"], "patient_code": r["patient_code"],
+        "admission_idx": r["admission_idx"], "doc_type": r["doc_type"],
+        "disease": r["disease"] or "", "resident_name": r["resident_name"],
+        "status": r["status"], "created_at": str(r["created_at"] or ""),
+        "signed_name": r["signed_name"] or "", "signed_at": str(r["signed_at"] or ""),
+        "sign_comment": r["sign_comment"] or "",
+        "spot_result": r["spot_result"] or "", "spot_name": r["spot_name"] or "",
+        "spot_comment": r["spot_comment"] or "",
+        "total_cnt": r["total_cnt"], "yellow_cnt": r["yellow_cnt"],
+        "fields": fields, "qc": qc, "edits": edits,
+        "xml": r["xml_text"] or "",
+    }
+    payload = json.dumps(package, ensure_ascii=False, indent=2).encode("utf-8")
+    auth.audit_log(u, "export_archive", r["record_no"], f"{r['doc_type']}·归档包导出（HIS 对接前置）")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Disposition", f'attachment; filename="{r["record_no"]}.json"')
+    handler.send_header("Content-Length", str(len(payload)))
+    handler.end_headers()
+    handler.wfile.write(payload)
 
 
 def do_review(handler, body, u):

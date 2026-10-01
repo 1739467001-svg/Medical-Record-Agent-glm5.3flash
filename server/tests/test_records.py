@@ -3,7 +3,7 @@
 运行前将 auth._ACTIVE_SQLITE 指向临时库（不触碰研发 local_dev.db）；
 records 模块级 init_db 会在临时库建 archives 表并播种演示数据。
 """
-import os, sys, sqlite3, tempfile, unittest
+import io, json, os, sys, sqlite3, tempfile, unittest
 
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, SERVER_DIR)
@@ -33,6 +33,7 @@ def make_handler(path="/records"):
 ATT = {"id": 2, "username": "att", "name": "李主任", "role": "attending"}
 RES = {"id": 3, "username": "res", "name": "王医生", "role": "resident"}
 QC = {"id": 4, "username": "qc", "name": "质控员", "role": "qc"}
+RES2 = {"id": 5, "username": "res2", "name": "另一位住院医师", "role": "resident"}
 
 BASE_FIELDS = [
     {"label": "主诉", "value": "右下腹痛1天", "binding": "A01.03"},
@@ -189,6 +190,54 @@ class TestAuditTrail(unittest.TestCase):
         records.do_audit(h2, QC, {})
         self.assertEqual(h2.response[0], 200)
         self.assertTrue(any(r["action"] == "archive_submit" for r in h2.response[1]["records"]))
+
+
+class TestArchiveExport(unittest.TestCase):
+    """P2-M 归档包导出（HIS 对接前置）：附件响应 + 权限同详情 + 写审计。"""
+
+    class DownloadHandler:
+        def __init__(self):
+            self.status = None
+            self.headers = {}
+            self.buf = io.BytesIO()
+            self.wfile = self.buf
+        def _json(self, code, obj, set_cookies=None):
+            self.status = code
+            self.headers["_json_error"] = str(obj.get("error") or "")
+        def send_response(self, code):
+            self.status = code
+        def send_header(self, k, v):
+            self.headers[k] = v
+        def end_headers(self):
+            pass
+
+    def test_export_by_attending(self):
+        rid, rec_no = submit()
+        h = self.DownloadHandler()
+        records.do_export(h, ATT, {"id": str(rid)})
+        self.assertEqual(h.status, 200)
+        self.assertIn(rec_no, h.headers.get("Content-Disposition", ""))
+        pkg = json.loads(h.buf.getvalue().decode("utf-8"))
+        self.assertEqual(pkg["format"], "mra-archive-v1")
+        self.assertEqual(pkg["record_no"], rec_no)
+        self.assertEqual(pkg["status"], "submitted")
+        self.assertIsInstance(pkg["fields"], list) and self.assertTrue(pkg["fields"])
+        self.assertIn("xml", pkg)   # XML 回填包随包导出（可为空串）
+        # 导出写审计
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='export_archive' AND target=?",
+                         (rec_no,)).fetchone()[0]
+        conn.close()
+        self.assertEqual(n, 1)
+
+    def test_export_guard(self):
+        rid, _ = submit(user=RES)
+        h = self.DownloadHandler()
+        records.do_export(h, RES2, {"id": str(rid)})   # 其他住院医师 → 403
+        self.assertEqual(h.status, 403)
+        h2 = self.DownloadHandler()
+        records.do_export(h2, ATT, {"id": "999999"})   # 不存在 → 404
+        self.assertEqual(h2.status, 404)
 
 
 if __name__ == "__main__":

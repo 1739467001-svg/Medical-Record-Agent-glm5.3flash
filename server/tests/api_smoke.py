@@ -102,6 +102,9 @@ def main():
         req("POST", "/auth/login", {"username": "smoke_att", "password": "smoke123"})
         code, d = req("POST", "/records/review", {"id": rid, "action": "sign", "comment": "同意"})
         check("上级医师签发", code == 200 and d.get("status") == "signed")
+        code, d = req("GET", f"/records/export?id={rid}")
+        check("归档包导出（mra-archive-v1）", code == 200 and d.get("format") == "mra-archive-v1"
+              and d.get("record_no", "").startswith("AR-") and isinstance(d.get("fields"), list))
         code, d = req("POST", "/records/review", {"id": rid, "action": "reject", "comment": "再试"})
         check("重复审签 → 409", code == 409)
 
