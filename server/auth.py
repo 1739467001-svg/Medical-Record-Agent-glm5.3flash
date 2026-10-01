@@ -39,7 +39,8 @@ MYSQL_CONF = {
     "database": os.environ.get("MRA_MYSQL_DB", "medical_record_agent"),
 }
 BACKEND = "mysql" if MYSQL_CONF["host"] else "sqlite"
-SQLITE_PATH = os.path.join(SERVER_DIR, "local_dev.db")
+# SQLite 路径：默认 server/local_dev.db；可用 MRA_SQLITE_PATH 重定向（冒烟测试/沙箱隔离用）
+SQLITE_PATH = os.environ.get("MRA_SQLITE_PATH") or os.path.join(SERVER_DIR, "local_dev.db")
 
 _DDL_MYSQL = [
     """CREATE TABLE IF NOT EXISTS users (

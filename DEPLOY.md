@@ -42,6 +42,10 @@ cp /etc/nginx/sites-available/hackathon.before-mra /etc/nginx/sites-available/ha
 
 # 备份（静态站，本质=代码版本本身；配置备份如下）
 tar czf /root/backup-mra-$(date +%F).tgz /srv/apps/medical-record-agent/{docker-compose.yml,conf} /etc/nginx/sites-available/hackathon
+
+# 数据库逻辑备份（users/sessions/archives，保留最近 14 份；建议 crontab 每日 02:00）
+bash /srv/apps/medical-record-agent/repo/deploy/backup-db.sh
+# crontab 示例：0 2 * * * /srv/apps/medical-record-agent/repo/deploy/backup-db.sh >> /root/backup-db.log 2>&1
 ```
 
 ## 更新全流程（本地 → GitHub → 服务器）

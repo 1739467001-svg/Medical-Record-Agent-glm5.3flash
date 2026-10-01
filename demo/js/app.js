@@ -113,6 +113,7 @@ function viewWorkbench(){
       <div class="page-title">工作台<small>${S.user ? esc(S.user.name) + (S.user.department ? " · " + esc(S.user.department) : "") : "王医生"} · 演示数据集</small></div>
       <div style="display:flex;gap:8px"><button class="btn" onclick="startTour(true)">▶ 新手引导</button><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
     </div>
+    <div id="rv-brief"></div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default">今日书写任务</div>
     <div class="task-list" id="tour-tasks">
       <div class="card task-row t-warn">
@@ -176,6 +177,27 @@ function viewWorkbench(){
           ${p.code === "DA0001" ? `<div style="margin-top:14px"><button class="btn primary big" onclick="event.stopPropagation();location.hash='#/adm/DA0001/1'">▶ 开始入院问诊（演示全流程）</button></div>` : `<div style="margin-top:14px;font-size:12px;color:var(--ink-3)">全景视图 · 点击住院记录查看文书流（交互流程演示配置于患者A）</div>`}
         </div>`).join("")}
     </div>`;
+  loadReviewBrief();
+}
+/* 审签待办提醒（P2-G）：上级医师/质控科登录后，工作台首屏显示待办数（异步取数，失败静默） */
+function loadReviewBrief(){
+  if (!S.user || S.user.demo || !isReviewer(S.user)) return;
+  setTimeout(async () => {
+    const el = document.getElementById("rv-brief");
+    if (!el) return;
+    try{
+      const r = await fetch("api/records");
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d.ok) return;
+      const st = d.stats || {};
+      const pending = st.submitted || 0, rejected = st.rejected || 0;
+      if (!pending && !rejected){ el.innerHTML = ""; return; }
+      el.innerHTML = `<div class="notice" style="border-left:4px solid var(--primary);background:var(--blue-bg)">
+        📋 <b>审签待办</b>：${pending ? `待审签 <b>${pending}</b> 份` : ""}${pending && rejected ? "，" : ""}${rejected ? `已退回 <b>${rejected}</b> 份（跟进整改）` : ""}
+        — <a href="#/review" style="color:var(--primary);font-weight:600">进入审签工作台 →</a></div>`;
+    } catch (e) { /* 静默降级：提醒卡属增强功能 */ }
+  }, 60);
 }
 function patientMeta(p){
   const sexes = { DA0001: "男 · 23岁 · 普外科", DA0002: "女 · 58岁 · 多科室" };

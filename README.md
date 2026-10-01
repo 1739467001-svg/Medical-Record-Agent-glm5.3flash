@@ -39,6 +39,10 @@ python3 mcp-server/test_client.py
 # 后端单元测试（零依赖 unittest，27 项：规范用语改写/无素材拦截/QC 回流/
 # 审签状态机/角色权限/修改回流聚合/老库迁移；临时 SQLite，不触碰研发数据）
 cd server && python3 -m unittest discover -s tests
+
+# API 冒烟测试（HTTP 层端到端，18 项：起真实服务进程 → 路由/前缀剥离/会话/
+# 审签流/角色越权/限流/LLM 未配置降级；临时 SQLite 隔离，无 LLM 密钥也可跑）
+python3 server/tests/api_smoke.py
 ```
 
 ## 核心设计（详见 PRD）
