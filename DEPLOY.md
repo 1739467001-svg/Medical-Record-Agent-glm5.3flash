@@ -53,17 +53,12 @@ git add -A && git commit -m "..." && git push
 cd /srv/apps/medical-record-agent/repo && git pull
 ```
 
-### ⚠️ 2026-09-28 同步状态备注（服务器到 GitHub 网络中断期间的处置）
+### ✅ 同步方式现状（2026-10-01 更新）
 
-服务器网络连 GitHub 不稳定，r4d9daa0 的两个文件已用 SFTP 手工同步（内容与 Git 完全一致，在 repo 中为 untracked）：
-- `repo/server/llm_api.py`、`repo/demo/js/app.js`
-
-**下次 `git pull` 恢复正常时**，如报 "untracked working tree file would be overwritten"，执行：
-```bash
-cd /srv/apps/medical-record-agent/repo
-rm server/llm_api.py demo/js/app.js && git pull   # pull 回的内容与手工放置的完全一致
-docker compose restart medical-record-agent llm-api
-```
+早期"服务器 git pull 不稳定需 SFTP 手工同步"的问题已不再依赖：日常更新统一走
+**免密 rsync 通道**（`deploy/update-server.sh`：同步代码 → 重启 llm-api → 健康检查），
+GitHub 推送用于代码托管与版本追溯，两条通道内容一致。历史遗留的 untracked 文件问题已随
+多次正常 pull/push 消除，无需再按旧备注处理。
 
 ### MySQL（认证数据库 · 首次部署一次性操作）
 
