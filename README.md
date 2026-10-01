@@ -13,7 +13,7 @@
 | `demo/` | 医生端网页工作台 Demo：工作台任务视角 → 模拟问诊转写 → **真实六智能体流水线生成**（流式展示各智能体运行）→ 四色确认 → XML 归档预览；含脱敏演示数据与字段地图 | 可运行 |
 | `server/` | **P1 多智能体核心**：六智能体 + orchestrator（DAG+trace）；LLM API（流式 NDJSON）；**认证服务 auth.py**（登录/注册/会话/引导标记，生产 MySQL / 研发 SQLite 自动降级，PBKDF2-HMAC-SHA256 200k 轮 + 每用户随机盐） | 已上线 |
 | `evaluation/` | 金标准反推评测框架 + 三类文书基线报告 + **一键回归自动化**（run_regression.py，md+json 双格式落盘、与上期 diff）；ASR 方言测试集标注脚手架 | 回归已自动化 |
-| `mcp-server/` | ASR MCP 服务器：统一语音识别接口，讯飞/阿里云/商汤/本地 Whisper 可插拔引擎（密钥后补） | 接口就绪 |
+| `mcp-server/` | ASR MCP 服务器：统一语音识别接口，讯飞/阿里云/商汤/本地 Whisper 可插拔引擎；**录音页真实链路已打通**（/asr/status 探测 + /asr/transcribe 转写，密钥后补即用，演示回放保留为降级） | 前置就绪，等密钥 |
 
 ## 快速开始
 

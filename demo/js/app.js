@@ -346,9 +346,20 @@ function renderAdmReadonly(body, p, adm, admIdx){
     ${adm.his ? `<div class="card" style="padding:18px 22px">${hisBoxes(adm.his)}</div>` : ""}`;
 }
 
-/* ---------------- Step1 问诊录音 ---------------- */
+/* ---------------- Step1 问诊录音（P2-E：真实引擎就绪时走真实录音，否则演示回放） ---------------- */
 function renderStepRecord(body, key, adm){
   const st = flowState(key);
+  const real = !!(S.asr && S.asr.real);
+  if (!S.asr){
+    // 引擎状态未取回：先按演示模式渲染，状态到达后（用户尚未开始录音时）按真实模式重渲染
+    fetch("api/asr/status").then(r => r.ok ? r.json() : null).then(d => {
+      if (d && d.ok && !S.asr){
+        S.asr = d;
+        const cta = document.getElementById("rec-cta");
+        if (cta && !cta.disabled && flowState(key).step === 1) renderStepRecord(body, key, adm);
+      }
+    }).catch(() => {});
+  }
   body.innerHTML = `
     <div class="rec-grid">
       <div class="card rec-panel">
@@ -359,8 +370,12 @@ function renderStepRecord(body, key, adm){
         <div class="rec-state" id="rec-state">点击开始问诊录音</div>
         <div class="wave" id="wave">${"<i></i>".repeat(24)}</div>
         <button class="btn big primary" id="rec-cta" style="margin-top:10px;width:100%">●&nbsp; 开始录音</button>
-        <div class="dialect-note">🎙 <b>方言识别</b>：系统实时将<b>山东方言</b>转写为普通话文本，自动区分<b>医生 / 患者</b>角色；药品名、检查名已加入医疗热词。演示环境为按真实入院记录重构的模拟对话。</div>
-        <div style="font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.7">演示模式：无需真实说话，点击「开始录音」后将自动播放一段模拟问诊，用以展示"对话 → 病历字段"的完整链路。正式版本步骤为真实麦克风录音 + 方言识别。</div>
+        <div class="dialect-note">${real
+          ? `🎙 <b>真实引擎已就绪</b>：${esc(S.asr.engine)} · 麦克风采集 16kHz PCM，结束后整段上传转写${esc(S.asr.note ? "（" + S.asr.note + "）" : "")}`
+          : `🎙 <b>方言识别</b>：系统实时将<b>山东方言</b>转写为普通话文本，自动区分<b>医生 / 患者</b>角色；药品名、检查名已加入医疗热词。演示环境为按真实入院记录重构的模拟对话。`}</div>
+        <div style="font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.7">${real
+          ? `真实模式：点击「开始录音」将请求<b>麦克风权限</b>并真实采集音频，结束后由服务端引擎转写（角色分离能力以引擎为准，无角色信息时可在过程稿中人工标注）。`
+          : `演示模式：无需真实说话，点击「开始录音」后将自动播放一段模拟问诊，用以展示"对话 → 病历字段"的完整链路。配置 ASR_* 引擎密钥后本页自动切换为真实录音。`}</div>
       </div>
       <div class="card transcript" id="transcript">
         <div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">等待录音开始…<br><span style="font-size:11.5px">转写内容将实时显示在此处，并自动挂载为 MD 过程稿</span></div>
@@ -373,20 +388,127 @@ function renderStepRecord(body, key, adm){
   let rec = false, sec = 0;
   cta.onclick = () => {
     if (!rec){
-      rec = true; orb.classList.add("rec"); wave.classList.add("on");
-      stateEl.textContent = "正在录音 · 方言实时转写中";
-      cta.innerHTML = "■&nbsp; 结束问诊"; cta.classList.remove("primary");
-      const t = setInterval(() => { sec++; timeEl.textContent = `00:${String(sec).padStart(2, "0")}`; }, 1000);
-      S.timers.push(t);
-      startStreaming(tp, key);
+      if (real){
+        startRealRecording(wave).then(ok => {
+          if (!ok){
+            stateEl.textContent = "无法访问麦克风（需授权，且本地环境为 localhost 或 HTTPS）";
+            window._startDemoReplay && window._startDemoReplay();
+            return;
+          }
+          rec = true; orb.classList.add("rec"); wave.classList.add("on");
+          stateEl.textContent = "正在录音 · 真实采集中（结束后转写）";
+          cta.innerHTML = "■&nbsp; 结束问诊"; cta.classList.remove("primary");
+          const t = setInterval(() => { sec++; timeEl.textContent = `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`; }, 1000);
+          S.timers.push(t);
+        });
+      } else {
+        rec = true; orb.classList.add("rec"); wave.classList.add("on");
+        stateEl.textContent = "正在录音 · 方言实时转写中";
+        cta.innerHTML = "■&nbsp; 结束问诊"; cta.classList.remove("primary");
+        const t = setInterval(() => { sec++; timeEl.textContent = `00:${String(sec).padStart(2, "0")}`; }, 1000);
+        S.timers.push(t);
+        window._startDemoReplay && window._startDemoReplay();
+      }
     } else {
       rec = false; orb.classList.remove("rec"); wave.classList.remove("on");
-      stateEl.textContent = "录音已结束";
+      stateEl.textContent = real ? "录音已结束 · 正在转写…" : "录音已结束";
       cta.disabled = true;
       clearTimers();
-      finishTranscript(tp, key);
+      if (real){
+        const b64 = stopRealRecording();
+        transcribeReal(tp, key, b64, sec, () => { cta.disabled = false; });
+      } else {
+        finishTranscript(tp, key);
+      }
     }
   };
+  // 演示回放（demo 模式入口 & 真实模式降级路径）
+  window._startDemoReplay = () => {
+    st.transcriptTurns = null; st.transcriptMeta = null;
+    startStreaming(tp, key);
+  };
+}
+/* 真实录音（P2-E 前置）：getUserMedia + AudioContext(16kHz) 采 PCM，停止后前端打 WAV 上传。
+   选 16k 单声道直出是为了让服务端引擎免 ffmpeg 直通（生产容器为 alpine 无转码工具）。 */
+async function startRealRecording(wave){
+  try{
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    window._recStream = stream;
+    let ctx;
+    try { ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); }
+    catch (e) { ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    window._recCtx = ctx;
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser(); analyser.fftSize = 64;
+    src.connect(analyser);
+    const volArr = new Uint8Array(analyser.frequencyBinCount);
+    window._volTimer = setInterval(() => {
+      analyser.getByteFrequencyData(volArr);
+      wave.querySelectorAll("i").forEach((b, i) => {
+        b.style.height = Math.max(4, (volArr[i % volArr.length] / 255) * 30) + "px";
+      });
+    }, 120);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    window._pcmChunks = [];
+    proc.onaudioprocess = e => { window._pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    src.connect(proc); proc.connect(ctx.destination);
+    window._recProc = proc;
+    window._recRate = ctx.sampleRate;
+    return true;
+  } catch (e) { return false; }
+}
+function stopRealRecording(){
+  try { if (window._recProc) window._recProc.disconnect(); } catch (e) {}
+  try { if (window._volTimer) clearInterval(window._volTimer); } catch (e) {}
+  try { if (window._recStream) window._recStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  try { if (window._recCtx) window._recCtx.close(); } catch (e) {}
+  return buildWavBase64(window._pcmChunks || [], window._recRate || 16000);
+}
+function buildWavBase64(chunks, rate){
+  let n = 0; chunks.forEach(c => n += c.length);
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); ws(8, "WAVE"); ws(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, "data"); v.setUint32(40, n * 2, true);
+  let off = 44;
+  chunks.forEach(c => { for (let i = 0; i < c.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, c[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  } });
+  const bytes = new Uint8Array(buf); let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function transcribeReal(tp, key, wavB64, durSec, onFail){
+  const st = flowState(key);
+  tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在上传音频并转写<span class="caret"></span><br><span style="font-size:11.5px">引擎 ${esc((S.asr || {}).engine || "")} · 录音时长 ${durSec}s · 整段文件识别</span></div>`;
+  try{
+    const r = await fetch("api/asr/transcribe", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio_base64: wavB64, filename: `问诊_DA0001_${Date.now()}`, duration_sec: durSec }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `AI 服务返回 ${r.status}`);
+    st.transcriptTurns = (d.segments || []).map(s => ({
+      role: s.speaker === "患者" ? "患者" : (s.speaker === "医生" ? "医生" : "对话"), text: s.text }));
+    st.transcriptMeta = { engine: d.engine, duration_sec: d.duration_sec || durSec,
+                          mock: !!d.mock, warnings: d.warnings || [], transcribed_at: d.transcribed_at };
+    st.transcriptDone = true;
+    st.revealed = (st.transcriptTurns || []).length;
+    renderTranscriptResult(tp, key);
+  } catch (e) {
+    tp.innerHTML = `<div class="notice">⚠ 转写失败：${esc(e.message || e)}<br>
+      <span style="font-size:11.5px">可重试录音；或先用演示回放继续体验后续流程（演示数据会明确标注，不会进入真实归档依据）。</span><br>
+      <button class="btn" style="margin-top:10px" onclick="window._startDemoReplay && window._startDemoReplay()">使用演示回放</button></div>`;
+    if (onFail) onFail();
+  }
+}
+function transcriptTurns(key){
+  const st = flowState(key);
+  return st.transcriptTurns && st.transcriptTurns.length ? st.transcriptTurns : S.dialogue;
 }
 function startStreaming(tp, key){
   const st = flowState(key);
@@ -420,14 +542,21 @@ function startStreaming(tp, key){
 function finishTranscript(tp, key){
   const st = flowState(key);
   st.transcriptDone = true;
-  const md = S.dialogue.map(t => `**${t.role}**：${t.text}`).join("  \n");
-  tp.innerHTML = S.dialogue.map(t => `
-    <div class="ts-line ${t.role === "医生" ? "doctor" : "patient"}" style="animation:none;opacity:1;transform:none">
-      <div class="who">${t.role}</div><div class="ts-bubble">${esc(t.text)}</div>
+  renderTranscriptResult(tp, key);
+}
+function renderTranscriptResult(tp, key){
+  const st = flowState(key);
+  const turns = transcriptTurns(key);
+  const meta = st.transcriptMeta;
+  const mdText = transcriptText(key);
+  tp.innerHTML = turns.map(t => `
+    <div class="ts-line ${t.role === "医生" ? "doctor" : (t.role === "患者" ? "patient" : "")}" style="animation:none;opacity:1;transform:none">
+      <div class="who">${esc(t.role)}</div><div class="ts-bubble">${esc(t.text)}</div>
     </div>`).join("") + `
     <div class="md-doc">
-      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${flowState(key).transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}</div>
-      <div class="md-body">问诊记录_DA0001_202609021040.md&nbsp;&nbsp;·&nbsp;&nbsp;27 轮对话 · ${flowState(key).transcriptEdit !== undefined ? flowState(key).transcriptEdit.length : S.dialogue.reduce((n, t) => n + t.text.length, 0)} 字 · 医生/患者角色已分离 · 全文可溯源</div>
+      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
+      <div class="md-body">问诊记录_DA0001_202609021040.md&nbsp;&nbsp;·&nbsp;&nbsp;${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : " · 医生/患者角色已分离"} · 全文可溯源</div>
+      ${(meta && (meta.warnings || []).length) ? `<div style="font-size:11px;color:var(--yellow);margin-top:6px">⚠ ${esc(meta.warnings.join("；"))}</div>` : ""}
       <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn primary big" id="gen-cta">⚙ 生成入院记录草稿（多智能体）</button>
         <button class="btn big" id="edit-ts">✎ 修正过程稿</button>
@@ -438,10 +567,15 @@ function finishTranscript(tp, key){
   const mdEl = tp.querySelector(".md-doc");
   if (mdEl) mdEl.scrollIntoView({ behavior: "smooth", block: "center" });
 }
+/* 过程稿统一文本（"医生：…\n患者：…"）：生成请求与编辑框共用同一数据源 */
+function transcriptText(key){
+  const st = flowState(key);
+  if (st.transcriptEdit !== undefined) return st.transcriptEdit;
+  return transcriptTurns(key).map(t => t.role + "：" + t.text).join("\n");
+}
 function editTranscript(tp, key){
   const st = flowState(key);
-  const cur = st.transcriptEdit !== undefined ? st.transcriptEdit
-    : S.dialogue.map(t => (t.role === "医生" ? "医生" : "患者") + "：" + t.text).join("\n");
+  const cur = transcriptText(key);
   const zone = tp.querySelector(".md-doc");
   zone.innerHTML = `
     <div class="md-title">✎ 修正转写过程稿（原稿留痕，修正将标记并参与生成）</div>
@@ -509,8 +643,9 @@ function renderStepGenerate(body, key, adm){
     </div>
     <div class="gen-done-cta" id="gen-done"></div>`;
   // 流式消费 NDJSON（真实六智能体事件；服务端错误如实展示，绝不本地伪造智能体动画）
+  // P2-E：转写过程稿随请求上传（此前演示链路未传——"对话→病历字段"实为断链，已修复）
   fetch("api/generate-draft", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: "DA0001", admission: 1, doc: curDoc }) })
+    body: JSON.stringify({ code: "DA0001", admission: 1, doc: curDoc, transcript: transcriptText(key) }) })
     .then(resp => {
       if (!resp.ok){
         return resp.json().catch(() => ({})).then(d => {
@@ -1381,6 +1516,8 @@ function startTour(replay){
       el.title = "AI 服务离线（本地静态环境属正常）";
     }
   }).catch(() => { const el = document.getElementById("ai-status"); if (el) el.title = "AI 服务离线"; });
+  // P2-E：ASR 引擎状态预取（录音页据此切换 真实录音 / 演示回放）
+  fetch("api/asr/status").then(r => r.ok ? r.json() : null).then(d => { if (d && d.ok) S.asr = d; }).catch(() => {});
 })();
 
 /* ---------------- AI 病例总结（服务端 LLM 实时生成） ---------------- */

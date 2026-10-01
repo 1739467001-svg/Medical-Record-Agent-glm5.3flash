@@ -37,11 +37,28 @@ from typing import Optional
 
 # ---------------- 音频预处理 ----------------
 
+def is_16k_mono_wav(path: str) -> bool:
+    """已是 16kHz 单声道 16bit PCM WAV 时各引擎可直用，无需转码（生产容器无 ffmpeg 的前置）。"""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(44)
+        if head[:4] != b"RIFF" or head[8:12] != b"WAVE" or head[12:16] != b"fmt ":
+            return False
+        fmt, ch = struct.unpack("<H", head[20:22])[0], struct.unpack("<H", head[22:24])[0]
+        rate = struct.unpack("<I", head[24:28])[0]
+        bits = struct.unpack("<H", head[34:36])[0]
+        return fmt == 1 and ch == 1 and rate == 16000 and bits == 16
+    except Exception:
+        return False
+
 def prepare_audio(audio_path: str, out_dir: str = "") -> str:
-    """转 16kHz 单声道 16bit PCM WAV（讯飞/多数引擎要求）。优先 ffmpeg，macOS 回退 afconvert。"""
+    """转 16kHz 单声道 16bit PCM WAV（讯飞/多数引擎要求）。优先 ffmpeg，macOS 回退 afconvert；
+    输入已是目标格式时原样返回（前端 MediaRecorder 侧直接打包 16k WAV 的场景）。"""
     audio_path = os.path.abspath(audio_path)
     if not os.path.exists(audio_path):
         raise FileNotFoundError(audio_path)
+    if is_16k_mono_wav(audio_path):
+        return audio_path
     out_dir = os.path.abspath(out_dir) if out_dir else os.path.dirname(audio_path)
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(audio_path))[0]
@@ -153,7 +170,8 @@ class XfyunEngine(BaseEngine):
         frames = open(wav, "rb").read()
         piece = 1280  # 40ms @16kHz 16bit 单声道
         order = {}  # seg_id -> text（RTASR 按 seg_id 分段返回）
-        ws = websocket.create_connection(url)
+        # 超时兜底：假签名/网络异常时讯飞可能长时间不应答，连接与读超时各 15s（联调实测）
+        ws = websocket.create_connection(url, timeout=15)
         try:
             for i in range(0, len(frames), piece):
                 ws.send(frames[i:i + piece])

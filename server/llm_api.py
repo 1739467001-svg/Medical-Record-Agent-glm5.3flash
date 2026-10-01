@@ -10,13 +10,30 @@ AI 病历智能体 · 服务端 LLM API（Demo 用）
   - 进程内限流（默认 6 次/分钟/IP）
 运行：python3 llm_api.py（端口 8090，仅 127.0.0.1 经 nginx /mra/api/ 反代暴露）
 """
-import json, os, sys, time, urllib.request, collections
+import json, os, sys, time, urllib.request, collections, base64, tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_DIR = os.path.dirname(_SERVER_DIR)
+sys.path.insert(0, _SERVER_DIR)
+# mcp-server 引擎适配器路径探测：本地仓库相对路径 / 容器挂载路径 / 显式环境变量；
+# 全部缺失时 ASR 功能优雅降级（其余功能不受影响）
+_MCP_CANDIDATES = [
+    os.environ.get("MRA_MCP_PATH", ""),
+    os.path.join(_REPO_DIR, "mcp-server"),
+    "/mcp-server",
+]
+for _p in _MCP_CANDIDATES:
+    if _p and os.path.isfile(os.path.join(_p, "asr_mcp_server.py")):
+        sys.path.insert(0, _p)
+        break
 from agents import run_pipeline, aggregator  # noqa: E402
 import auth  # noqa: E402  登录/注册/会话（server/auth.py）
 import records  # noqa: E402  归档与审签流（server/records.py，P2-G）
+try:
+    import asr_mcp_server  # noqa: E402  可插拔 ASR 引擎适配器（P2-E：mock/xfyun/aliyun/sensetime/local-whisper）
+except ImportError:
+    asr_mcp_server = None  # 适配器不可用：/asr/* 返回 503，服务其余功能正常
 
 DATA_PATH = os.environ.get("MRA_DATA_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "data", "patients.json"))
 PORT = int(os.environ.get("MRA_LLM_PORT", "8090"))
@@ -32,6 +49,26 @@ _CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charse
 _patients = json.load(open(DATA_PATH, encoding="utf-8"))
 _hits = collections.deque()
 _auth_hits = collections.deque()
+_asr_hits = collections.deque()
+ASR_RATE_LIMIT = int(os.environ.get("MRA_ASR_RATE_LIMIT", "3"))
+ASR_MAX_AUDIO_BYTES = 30 * 1024 * 1024  # base64 前原始音频上限
+
+# 真实引擎 = 配置了真实密钥/模型的引擎（mock 与占位适配器不算）
+_ASR_REAL_ENGINES = ("xfyun", "aliyun", "sensetime", "local-whisper")
+
+def asr_status():
+    """ASR 引擎就绪状态（前端据此切换 真实录音/演示回放）。适配器不可用时优雅降级。"""
+    if asr_mcp_server is None:
+        return {"ok": True, "engine": "none", "real": False, "ready": False,
+                "note": "引擎适配器不可用（未挂载 mcp-server）",
+                "demo_hint": "录音步骤为演示回放模式"}
+    default = os.environ.get("ASR_DEFAULT_ENGINE", "mock")
+    eng = asr_mcp_server.ENGINES.get(default)
+    real = default in _ASR_REAL_ENGINES and bool(eng and eng.configured())
+    return {"ok": True, "engine": default, "real": real,
+            "ready": bool(eng and eng.configured()),
+            "note": (eng.status().get("note") if eng else "未知引擎"),
+            "demo_hint": "未配置真实引擎密钥（ASR_* 环境变量），录音步骤为演示回放模式" if not real else ""}
 
 SYSTEM = "你是医院的病案科医生，负责撰写规范、克制、专业的中文病例总结。只依据给定材料，绝不编造任何症状、诊断或数值；材料不足的地方写\"（材料未提供）\"。"
 
@@ -129,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self._json(200, {"ok": True, "engine": os.environ.get("LLM_MODEL", "Deepseek-v4-flash"),
                                     "auth": auth.BACKEND})
+        if path == "/asr/status":
+            return self._json(200, asr_status())
         if path.startswith("/auth/"):
             return auth.handle(self, {}, path)
         if path == "/records" or path.startswith("/records/"):
@@ -155,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             if "__error__" in body:
                 return self._json(400, {"error": f"请求体解析失败: {body['__error__']}"})
             return records.handle(self, body, path)
+        if path == "/asr/transcribe":
+            return self._asr_transcribe()
         if path not in ("/generate-summary", "/generate-draft"):
             return self._json(404, {"error": "not found"})
         if not self._rate_ok(_hits, RATE_LIMIT):
@@ -175,6 +216,50 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._json(500, {"error": f"生成失败: {e}"})
         return self._stream_draft(body)
+
+    # ---- ASR 转写（P2-E 前置：音频上传 → 可插拔引擎 → 统一 Transcript） ----
+    def _asr_transcribe(self):
+        if not self._rate_ok(_asr_hits, ASR_RATE_LIMIT):
+            return self._json(429, {"error": "转写请求过于频繁（每分钟 3 次），请稍后再试"})
+        st = asr_status()
+        if asr_mcp_server is None:
+            return self._json(503, {"error": "ASR 引擎适配器不可用（服务端未挂载 mcp-server）"})
+        if not st["real"]:
+            return self._json(503, {"error": "真实 ASR 引擎未配置（当前录音页为演示回放模式）。" + (st["demo_hint"] or "")})
+        # 合规：真实引擎外呼仅限登录医生账号（演示模式不触发云端转写，PRD Q10）
+        u = auth._user_by_token(self.cookies.get(auth.SESSION_COOKIE))
+        if not u:
+            return self._json(401, {"error": "真实转写需登录医生账号"})
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        except Exception as e:
+            return self._json(400, {"error": f"请求体解析失败: {e}"})
+        audio_b64 = str(body.get("audio_base64") or "")
+        if not audio_b64:
+            return self._json(400, {"error": "缺少 audio_base64"})
+        try:
+            raw = base64.b64decode(audio_b64)
+        except Exception as e:
+            return self._json(400, {"error": f"音频解码失败: {e}"})
+        if len(raw) > ASR_MAX_AUDIO_BYTES:
+            return self._json(413, {"error": "音频过大（>30MB），请分段录音"})
+        filename = os.path.splitext(os.path.basename(str(body.get("filename") or "recording")))[0].replace(" ", "_")[:64] or "recording"
+        fd, tmp = tempfile.mkstemp(prefix=f"mra_asr_{filename}_", suffix=".wav")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            engine = asr_mcp_server.pick_engine(None)
+            t = engine.transcribe(tmp, speakers=bool(body.get("speakers", True)))
+            d = t.to_dict()
+            return self._json(200, {"ok": True, "engine": d["engine"], "text": d["text"],
+                                    "segments": d["segments"], "duration_sec": d.get("duration_sec"),
+                                    "mock": bool(d.get("mock")), "warnings": d.get("warnings") or [],
+                                    "transcribed_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+        except Exception as e:
+            return self._json(502, {"error": f"转写失败：{e}"})
+        finally:
+            try: os.remove(tmp)
+            except OSError: pass
 
     # ---- 多智能体草稿（NDJSON 流式：每行一个 JSON 事件） ----
     def _stream_draft(self, body):
