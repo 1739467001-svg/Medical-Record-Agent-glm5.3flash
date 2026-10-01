@@ -55,7 +55,7 @@ def run_pipeline(transcript=None, his_views=None, patients_admission=None,
     trace.append(tr_w); report("writer", "done", tr_w, partial={"fields": len(draft)})
 
     report("qc", "run")
-    passed, tr_q = qc.qc(draft, dataset)
+    passed, tr_q = qc.qc(draft, dataset, doc_type)
     trace.append(tr_q); report("qc", "done", tr_q)
 
     report("mapper", "run")

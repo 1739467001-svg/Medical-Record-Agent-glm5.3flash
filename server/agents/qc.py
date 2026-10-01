@@ -9,11 +9,18 @@ from .common import llm_available, llm_json, sanitize, trace_step
 RANGES = {"体温": (34, 43), "脉搏": (30, 220), "呼吸": (8, 40),
           "收缩压": (50, 260), "舒张压": (30, 160)}
 
+# 各文书类型必填字段（PRD 153 / 病历书写基本规范）；缺失进入 QC 报告"缺失待补"，由医生补录
+REQUIRED = {
+    "入院记录": ["主诉", "现病史", "既往史", "个人史", "家族史", "初步诊断"],
+    "首次病程记录": ["病例特点", "初步诊断", "诊断依据", "鉴别诊断", "诊疗计划"],
+    "出院记录": ["入院情况", "诊疗经过", "出院情况", "出院医嘱", "出院诊断"],
+}
+
 def _num(s):
     m = re.search(r"-?\d+(\.\d+)?", str(s))
     return float(m.group(0)) if m else None
 
-def qc(draft, dataset):
+def qc(draft, dataset, doc_type=None):
     """返回 (passed_fields, qc_trace)。passed_fields 仅含通过校验的字段；被拦截项记入报告。"""
     t0 = time.time()
     passed, blocked = [], []
@@ -56,8 +63,24 @@ def qc(draft, dataset):
                 blocked += [(l, "LLM 复核判定不合规，已移除") for l in remove]
         except Exception as e:
             warnings.append(f"LLM 复核失败（保守放行代码层结果）：{e}")
-    report = {"blocked": [{"label": l, "reason": r} for l, r in blocked], "warnings": warnings,
-              "summary": f"通过 {len(passed)} / 拦截修正 {len(blocked)} / 复核提示 {len(warnings)}"}
+    # ---- 报告组装 ----
+    missing = []
+    req = REQUIRED.get(doc_type or "", [])
+    if req:
+        have = {f["label"] for f in draft}
+        missing = [l for l in req if l not in have]
+    if doc_type and not any("签名" in (f.get("label") or "") for f in draft):
+        missing.append("医生签名（须医生手工签章）")
+    # 诊断一致性（代码层软校验）：初步/出院诊断应与申请单临床诊断线索呼应
+    dx = next((f for f in passed if f["label"] in ("初步诊断", "出院诊断") and str(f["value"]).strip()), None)
+    diags = [d for d in (dataset.get("clinic_diags") or []) if d]
+    if dx and diags:
+        dv = str(dx["value"])
+        if not any((cd[:4] in dv) or (dv[:4] in cd) for cd in diags):
+            warnings.append(f"QC 一致性：{dx['label']}「{dv[:32]}」与申请单临床诊断线索（{'、'.join(diags[:2])}）差异较大，请核实")
+    report = {"blocked": [{"label": l, "reason": r} for l, r in blocked],
+              "missing": missing, "warnings": warnings,
+              "summary": f"通过 {len(passed)} / 拦截修正 {len(blocked)} / 缺失待补 {len(missing)} / 复核提示 {len(warnings)}"}
     tr = trace_step("qc", (time.time() - t0) * 1000, report["summary"], warnings)
     tr["report"] = report  # 明细随 trace/stats 透出，供医生确认页前置展示
     return passed, tr

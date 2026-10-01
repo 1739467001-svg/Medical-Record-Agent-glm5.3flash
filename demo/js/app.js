@@ -681,6 +681,7 @@ function renderStepConfirm(body, key, adm){
         🛡 <b>质控校验报告</b>：${esc(qc.summary)}<span class="qc-arrow">▾ 明细</span></div>
       <div class="qc-detail" id="qc-detail" style="display:none">
         ${qc.blocked.length ? qc.blocked.map(b => `<div class="qc-item bad">⛔ <b>${esc(b.label)}</b> — ${esc(b.reason)}</div>`).join("") : `<div class="qc-item ok">✓ 无拦截修正项</div>`}
+        ${(qc.missing || []).map(m => `<div class="qc-item warn">⚠ 缺失必填：${esc(m)}（AI 未生成，严禁臆造——请医生补录或手工书写）</div>`).join("")}
         ${(qc.warnings || []).map(w => `<div class="qc-item warn">⚠ ${esc(w)}</div>`).join("")}
       </div>
     </div>` : ""}
