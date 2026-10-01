@@ -852,6 +852,7 @@ function renderStepConfirm(body, key, adm){
         ${st.editLog.length ? `<button class="mini-btn" style="margin-left:6px" onclick="toggleEditLog()">查看留痕</button>` : ""}
       </span>
       <div style="display:flex;gap:10px">
+        <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
         <button class="btn big" onclick="exportDraftXML()">导出草稿 XML</button>
         <button class="btn primary big" id="confirm-btn">✓ 医生确认无误，提交归档</button>
       </div>
@@ -1024,6 +1025,7 @@ function renderStepArchive(body, key, adm){
     || admRec.docs.find(d => d.type === curDoc)
     || admRec.docs.find(d => d.type === "病程记录" && (d.title || "").includes(curDoc))
     || admRec.docs.find(d => d.type === "入院记录");
+  window._draftDoc = doc;
   const st = flowState(key);
   const labeled = doc.fields.filter(f => f.label);
   const xml = buildXML(doc);
@@ -1052,6 +1054,7 @@ function renderStepArchive(body, key, adm){
         <div class="receipt-line"><span>留痕</span><b>生成/修改/确认/审签 全程可追溯</b></div>
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/review'">查看审签进度 →</button>
+          <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
           <button class="btn big" onclick="location.hash='#/workbench'">返回工作台</button>
         </div>` : `
         <div style="font-family:var(--serif);font-size:20px;font-weight:700;color:var(--green);margin-bottom:4px">已归档（模拟）</div>
@@ -1064,6 +1067,7 @@ function renderStepArchive(body, key, adm){
         <div class="receipt-line"><span>留痕</span><b>生成/修改/确认 全程可追溯</b></div>
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button>
+          <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
           <button class="btn big" onclick="location.hash='#/patient/DA0001'">在患者全景中查看</button>
         </div>`}
       </div>
@@ -1098,6 +1102,43 @@ function downloadXML(){
   a.click(); URL.revokeObjectURL(a.href);
 }
 function exportDraftXML(){ downloadXML(); }
+
+/* ---------------- 打印 / 存 PDF（P2-J）：专用病历文书打印视图 ----------------
+   思路：把当前文书渲染为干净的"病历文书"版式（隐藏应用界面），交给浏览器
+   原生打印——另存为 PDF 零依赖、零新增库；正式归档仍走 XML 回填包。 */
+function buildPrintHTML(doc, opts){
+  opts = opts || {};
+  const adm = getPatient("DA0001").admissions[0];
+  const sections = {};
+  doc.fields.filter(f => f.label && String(f.value || "").trim()).forEach(f => {
+    const sec = sectionOf(f);
+    (sections[sec] = sections[sec] || []).push(f);
+  });
+  const secHtml = SECTION_ORDER.filter(s => sections[s]).map(s => `
+    <h3>${esc(s)}</h3>
+    <table>${sections[s].map(f => `
+      <tr><td class="pr-lb">${esc(f.label)}</td><td>${esc(String(f.value).replace(/\r?\n/g, "；"))}</td></tr>`).join("")}</table>`).join("")
+    || "<p style='font-size:12px;color:#666'>（无可打印字段）</p>";
+  const metaBits = ["患者：患者A（DA0001）", "病种：" + (adm.disease || "—").replace(/（.*）$/, "")];
+  if (opts.archiveNo) metaBits.push("归档编号：" + opts.archiveNo);
+  if (opts.confirmedBy) metaBits.push("确认医生：" + opts.confirmedBy);
+  metaBits.push("打印时间：" + new Date().toLocaleString("zh-CN", { hour12: false }));
+  return `
+    <div class="pr-hospital">东阿县人民医院 · AI 病历智能体（草稿）</div>
+    <h2>${esc(doc.type)}</h2>
+    <div class="pr-meta">${metaBits.map(esc).join(" · ")}</div>
+    ${secHtml}
+    <div class="pr-foot">本文书由多智能体系统生成、医生逐项核对${opts.confirmedBy ? "并确认提交" : "（当前为草稿，须经医生确认后方可归档）"}；字段来源（蓝=HIS 带入 / 绿=对话提炼 / 灰=规范所见 / 黄=缺失待补）与修改留痕详见系统内归档记录，正式归档以 XTextDocument 回填包回写院内系统为准。</div>`;
+}
+function printRecord(){
+  const doc = window._draftDoc;
+  if (!doc) return alert("暂无可打印的文书——请先完成生成或进入归档页");
+  const st = flowState("DA0001_1");
+  let root = document.getElementById("print-root");
+  if (!root){ root = document.createElement("div"); root.id = "print-root"; document.body.appendChild(root); }
+  root.innerHTML = buildPrintHTML(doc, { archiveNo: st.archive && st.archive.record_no, confirmedBy: st.confirmedBy });
+  window.print();
+}
 
 /* ================================================================ */
 /* 审签工作台（P2-G 多角色与审签流）                                  */
@@ -1215,6 +1256,36 @@ async function downloadEditsPack(){
     a.click(); URL.revokeObjectURL(a.href);
   } catch (e) { alert("下载失败：" + (e.message || e)); }
 }
+
+/* ---------------- 审签/质控台账 CSV 导出（P2-J） ----------------
+   复用 /records 列表接口（可见范围随角色：resident 本人 / attending、qc 全量），
+   客户端生成 CSV（\uFEFF BOM 兼容 Excel 中文，引号转义），正式台账以系统内记录为准。 */
+function buildLedgerCSV(records){
+  const cell = v => `"${String(v ?? "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
+  const heads = ["归档编号", "文书类型", "病种", "书写医生", "字段总数", "黄字段数", "审签状态",
+                 "审签人", "审签时间", "审签意见", "抽查结果", "抽查意见", "提交时间"];
+  const lines = [heads.map(cell).join(",")].concat((records || []).map(r => [
+    r.record_no, r.doc_type, r.disease, r.resident_name, r.total_cnt, r.yellow_cnt,
+    r.status_name, r.signed_name, (r.signed_at || "").slice(0, 16), r.sign_comment,
+    r.spot_name_str, r.spot_comment, (r.created_at || "").slice(0, 16),
+  ].map(cell).join(",")));
+  return "\uFEFF" + lines.join("\r\n");
+}
+async function exportLedgerCSV(){
+  try{
+    const r = await fetch("api/records");
+    if (r.status === 401) { location.hash = "#/login"; return; }
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "加载失败");
+    const rows = d.records || [];
+    if (!rows.length) return alert("当前可见范围为空，暂无可导出的台账");
+    const blob = new Blob([buildLedgerCSV(rows)], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `审签台账_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) { alert("导出失败：" + (e.message || e)); }
+}
 async function loadReviewList(){
   const body = document.getElementById("rv-body");
   if (!body) return;
@@ -1229,7 +1300,8 @@ async function loadReviewList(){
       <span class="tag" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-line)">已审签 ${st.signed || 0}</span>
       <span class="tag" style="background:#fdeceb;color:var(--red);border:1px solid #f2c4bd">已退回 ${st.rejected || 0}</span>
       <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">抽查合格 ${(d.spot || {}).ok || 0} · 缺陷 ${(d.spot || {}).issue || 0}</span>
-      ${isReviewer(S.user) ? "" : `<span class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)">仅显示本人文书</span>`}`;
+      ${isReviewer(S.user) ? "" : `<span class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)">仅显示本人文书</span>`}
+      <button class="mini-btn" style="margin-left:auto" onclick="exportLedgerCSV()">⬇ 导出台账 CSV</button>`;
     const rows = d.records || [];
     document.getElementById("rv-rows").innerHTML = rows.length ? rows.map(r => `
       <tr>
