@@ -51,8 +51,11 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
     draft = []
     warnings = []
     is_first_course = doc_type == "首次病程记录"
-    # ---- 蓝：HIS 直填（首程为段落型文书，生命体征写入病例特点正文，不单独成字段） ----
-    if not is_first_course:
+    # 首程两种形态：粗粒度段落模板（target_labels 含"病例特点"，如 demo 数据）→ 五小节分支；
+    # 细粒度字段模板（真实金标准：老中青/主诉/…，55+ 字段）→ 与入院记录相同的字段还原路径
+    para_mode = is_first_course and ((not target_labels) or ("病例特点" in target_labels))
+    # ---- 蓝：HIS 直填（粗粒度段落首程：体征写入病例特点正文，不单独成字段） ----
+    if not para_mode:
         vit = dataset.get("vitals", {})
         for src, dst in VITAL_MAP.items():
             if dst and src in vit and dst not in [d["label"] for d in draft]:
@@ -63,16 +66,15 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
             hi, _, lo = str(vit["血压"]).partition("/")
             draft += [DraftField(label="收缩压", value=hi.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95),
                       DraftField(label="舒张压", value=lo.strip(), source="blue", basis="HIS 生命体征（血压）", confidence=0.95)]
-    # ---- 灰：模板常规（首程无体格检查常规项，跳过） ----
-    if not is_first_course:
-        for label, value in GRAY_DEFAULTS.items():
-            if target_labels is None or label in target_labels:
-                draft.append(DraftField(label=label, value=value, source="gray",
-                                        basis="模板常规所见（须医生核对）", confidence=0.8))
+    # ---- 灰：模板常规（严格按 target_labels 注入，首程模板无体格检查项时自动为空） ----
+    for label, value in GRAY_DEFAULTS.items():
+        if target_labels is None or label in target_labels:
+            draft.append(DraftField(label=label, value=value, source="gray",
+                                    basis="模板常规所见（须医生核对）", confidence=0.8))
     # ---- 绿/蓝/灰：LLM 归纳生成 ----
     if llm_available():
-        if is_first_course:
-            # 首程（PRD 153）：固定五小节；鉴别诊断/诊疗计划为知识辅助（灰源），医生过目核定
+        if para_mode:
+            # 段落型首程（PRD 153）：固定五小节；鉴别诊断/诊疗计划为知识辅助（灰源），医生过目核定
             instruct = (
                 "固定输出五个小节：病例特点（人口学概括+主诉现病史要点+查体要点+辅助检查摘要）；"
                 "初步诊断（依据申请单临床诊断线索与检查印象归纳）；诊断依据（逐条对应病例特点）；"

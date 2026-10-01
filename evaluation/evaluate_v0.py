@@ -211,7 +211,7 @@ def evaluate_one(code, gold_fields, views, anchor="入院", doc_type="入院记�
     }
 
 # ---------------- 报告 ----------------
-def main(base_dir, generator="rules", types=("入院记录", "出院记录", "首次病程记录")):
+def main(base_dir, generator="rules", types=("入院记录", "出院记录", "首次病程记录"), out=None):
     out_dir = os.path.dirname(os.path.abspath(__file__))
     if generator == "llm":
         import generate_llm
@@ -275,7 +275,7 @@ def main(base_dir, generator="rules", types=("入院记录", "出院记录", "�
     lines.append("3. **扩展文书类型**：下一步首次病程记录（鉴别诊断等知识辅助字段是 LLM 价值点）。")
     lines.append("4. 阈值判断：距 PRD 7.2 建议验收值（覆盖率≥90%、可用率≥80%）的差距 = 录音依赖度 + LLM 改写能力两部分，前者是数据问题（D1），后者是一期核心研发内容。")
     report = "\n".join(lines)
-    out = os.path.join(out_dir, f"评测报告_{generator}.md")
+    out = os.path.join(out_dir, out or f"评测报告_{generator}.md")
     with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print("REPORT_WRITTEN:", out)
@@ -288,5 +288,6 @@ if __name__ == "__main__":
     ap.add_argument("base", nargs="?", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "病历资料", "住院"))
     ap.add_argument("--generator", choices=["rules", "llm", "multiagent"], default="rules")
     ap.add_argument("--types", default="入院记录,出院记录,首次病程记录")
+    ap.add_argument("--out", default=None, help="输出报告文件名（默认 评测报告_<generator>.md）")
     a = ap.parse_args()
-    main(a.base, generator=a.generator, types=tuple(t for t in a.types.split(",") if t))
+    main(a.base, generator=a.generator, types=tuple(t for t in a.types.split(",") if t), out=a.out)
