@@ -2,9 +2,11 @@
 """质控校验智能体（双层，PRD 4.3.1）：代码硬校验 + LLM 复核，只删改不新增。
 代码层（硬拦截）：数值范围、日期逻辑、体温/心率生理限值、与数据集数值不一致、疑似受控码。
 LLM 层（软复核）：医学逻辑矛盾、表述可疑（如把检查印象写进现病史），输出“应修正字段”。
+P2-H 规范用语回流：诊断字段含"？"或 ICD 尾缀等非常规表述时，代码层直接改写回写字段
+（"生成→质控→回流"闭环的质控端，与 writer 的生成端规范改写互为兜底）。
 """
 import re, time
-from .common import llm_available, llm_json, sanitize, trace_step
+from .common import llm_available, llm_json, sanitize, normalize_diag_text, trace_step
 
 RANGES = {"体温": (34, 43), "脉搏": (30, 220), "呼吸": (8, 40),
           "收缩压": (50, 260), "舒张压": (30, 160)}
@@ -23,7 +25,7 @@ def _num(s):
 def qc(draft, dataset, doc_type=None):
     """返回 (passed_fields, qc_trace)。passed_fields 仅含通过校验的字段；被拦截项记入报告。"""
     t0 = time.time()
-    passed, blocked = [], []
+    passed, blocked, warnings = [], [], []
     ds_vitals = dataset.get("vitals", {})
     for f in draft:
         label, value = f["label"], str(f["value"]).strip()
@@ -44,9 +46,16 @@ def qc(draft, dataset, doc_type=None):
                         break
         if re.match(r"^\s*\d+(\.\d+)?\s*$", value) and label not in RANGES and label != "数字":
             blocked.append((label, "疑似受控码值")); continue
+        # 诊断规范用语回流（P2-H）：逐条去"？"与 ICD"其他的"尾缀，修正写回字段（只删不改）
+        if "诊断" in label:
+            segs = [normalize_diag_text(seg) for seg in re.split(r"[\n；;]+", value)]
+            fixed = "\n".join(s for s in segs if s)
+            if fixed and fixed != value:
+                f = dict(f); f["value"] = fixed
+                f["basis"] = (f.get("basis", "") + "；QC 规范用语改写（去疑问号/ICD尾缀）")[:160]
+                warnings.append(f"QC 规范用语回流：「{label}」去疑问号/ICD尾缀等非常规表述")
         passed.append(f)
-    # LLM 复核：仅当有绿字段且 LLM 可用时
-    warnings = []
+    # LLM 复核：仅当有绿字段且 LLM 可用时（warnings 不重置，代码层与复核层警告合并透出）
     greens = [f for f in passed if f["source"] == "green"]
     if greens and llm_available():
         listing = "\n".join(f"- {f['label']}：{f['value'][:120]}（依据：{f['basis'][:60]}）" for f in greens)

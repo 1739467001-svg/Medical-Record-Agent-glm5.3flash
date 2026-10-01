@@ -46,6 +46,18 @@ def llm_json(messages, max_tokens=1200, timeout=90):
             return json.loads(m.group(0))
         raise
 
+_ICD_TAIL = ("，其他的", ",其他的", "，其他", ",其他")
+
+def normalize_diag_text(value):
+    """诊断规范用语改写（代码层，writer/QC 共用，评测实证 P2-H）：
+    申请单诊断常带疑问号（"视神经脊髓炎？"）与 ICD 尾缀（"急性胃炎，其他的"），
+    病历书写须规范表述——去"？"、去"其他的"尾缀。只删不改不增。"""
+    v = str(value or "").strip().replace("？", "").replace("?", "")
+    for tail in _ICD_TAIL:
+        if v.endswith(tail):
+            v = v[: -len(tail)]
+    return v.strip()
+
 def sanitize(text):
     """送 LLM 前兜底脱敏：手机号/身份证/连续长数字（研发态云端合规，PRD Q10）。"""
     t = str(text)

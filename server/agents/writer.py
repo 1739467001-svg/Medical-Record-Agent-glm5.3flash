@@ -1,9 +1,18 @@
 # -*- coding: utf-8 -*-
 """病历生成智能体（LLM，PRD 4.3.1）：要素+数据集+知识 → 草稿字段（四色来源元数据）。
 铁律：材料未提及一律不产出该字段（黄=留空），受控码字段（纯数字值域）绝不猜测。
+P2-H 规范用语改写：诊断字段由申请单诊断规范改写产出（规则直填兜底 + LLM 筛选规范），
+无对话素材时病史类字段（主诉/现病史等）硬拦截——不得从诊断线索反推编造。
 """
 import time
-from .common import llm_available, llm_json, sanitize, DraftField, trace_step
+from .common import llm_available, llm_json, sanitize, normalize_diag_text, DraftField, trace_step
+
+# 病史类字段：只存在于医患对话（评测实证：录音依赖度 54%~67%），无素材时禁止 LLM 编造
+HISTORY_LABELS = ("主诉", "现病史", "既往史", "个人史", "婚育史", "家族史", "月经史")
+# 诊断依据：严格依赖患者个体推理链（首查房口述），无素材时同样禁止；鉴别诊断/诊疗计划为
+# 灰源知识辅助（PRD P2-A 设计），保留生成、由医生核定
+REASONING_LABELS = ("诊断依据",)
+DIAG_LABEL_BY_TYPE = {"入院记录": "初步诊断", "首次病程记录": "初步诊断", "出院记录": "出院诊断"}
 
 def _dataset_text(ds, doc_type):
     lines = [f"住院锚点：{ds.get('anchor_dt') or '未识别'}"]
@@ -17,7 +26,8 @@ def _dataset_text(ds, doc_type):
     if ds.get("orders"):
         lines.append("医嘱（节选）：" + "；".join(o["text"] for o in ds["orders"][:15]))
     if ds.get("clinic_diags"):
-        lines.append("申请单临床诊断线索：" + "；".join(ds["clinic_diags"][:6]))
+        # 规范用语改写（P2-H）：去"？"与 ICD 尾缀后再送 LLM，避免非常规表述进正文
+        lines.append("申请单临床诊断线索：" + "；".join(normalize_diag_text(d) for d in ds["clinic_diags"][:12]))
     return "\n".join(lines)
 
 def _elements_text(elements):
@@ -42,6 +52,32 @@ GRAY_DEFAULTS = {
 }
 VITAL_MAP = {"腋下体温": "体温", "体温": "体温", "脉搏": "脉搏", "呼吸": "呼吸",
              "血压": None, "收缩压": "收缩压", "舒张压": "舒张压"}
+
+def _rule_diagnosis(dataset, target_labels, doc_type):
+    """申请单诊断 → 规范用语改写 → 编号列表直填（蓝，P2-H）。
+    评测实证：医生初步诊断即申请单诊断的规范表述（如"急性阑尾炎？"→"急性阑尾炎"），
+    规则直填比 LLM 自由归纳更忠实；LLM 改写成功时本兜底不生效。"""
+    label = DIAG_LABEL_BY_TYPE.get(doc_type, "初步诊断")
+    if target_labels is not None and label not in target_labels:
+        label = next((l for l in ("初步诊断", "出院诊断", "入院诊断") if l in target_labels), None)
+        if not label:
+            return None
+    diags, seen = [], set()
+    for d in dataset.get("clinic_diags") or []:
+        nd = normalize_diag_text(d)
+        if nd and nd not in seen:
+            seen.add(nd)
+            diags.append(nd)
+    if not diags:
+        return None
+    return DraftField(label=label, value="\n".join(f"{i+1}.{d}" for i, d in enumerate(diags)),
+                      source="blue", basis="HIS 申请单临床诊断（规范用语改写）", confidence=0.85)
+
+# 诊断规范改写指令（P2-H）：只筛选与规范化，不得发明诊断——这是"生成→质控"闭环的生成端
+_DX_RULE = ("初步诊断/出院诊断：只依据【结构化数据】的申请单临床诊断线索做规范用语改写，"
+            "输出编号列表（每行\"1.诊断名\"）：保留病名原文（不得增删病变性质词）；"
+            "剔除症状性条目（如腹痛、头晕——症状不是诊断）与\"健康查体\"类非诊断条目；合并重复项。"
+            "不得从检查印象新增诊断；申请单无线索则不输出该字段。")
 
 def generate(elements, dataset, knowledge, doc_type="入院记录", target_labels=None):
     """返回 (draft_fields, trace)。target_labels：模板字段标签集（来自字段地图，非答案）。
@@ -71,28 +107,41 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
         if target_labels is None or label in target_labels:
             draft.append(DraftField(label=label, value=value, source="gray",
                                     basis="模板常规所见（须医生核对）", confidence=0.8))
+    # ---- 蓝：诊断规范改写基准（规则直填，LLM 改写成功时被其覆盖） ----
+    rule_dx = _rule_diagnosis(dataset, target_labels, doc_type)
+    has_elements = bool(elements)
     # ---- 绿/蓝/灰：LLM 归纳生成 ----
     if llm_available():
         if para_mode:
             # 段落型首程（PRD 153）：固定五小节；鉴别诊断/诊疗计划为知识辅助（灰源），医生过目核定
+            features = ("病例特点（人口学概括+主诉现病史要点+查体要点+辅助检查摘要）" if has_elements else
+                        "病例特点（人口学概括+查体要点+辅助检查摘要；无对话素材，不得虚构主诉/现病史）")
             instruct = (
-                "固定输出五个小节：病例特点（人口学概括+主诉现病史要点+查体要点+辅助检查摘要）；"
-                "初步诊断（依据申请单临床诊断线索与检查印象归纳）；诊断依据（逐条对应病例特点）；"
+                f"固定输出五个小节：{features}；"
+                "初步诊断（只依据申请单临床诊断线索规范改写：保留病名原文、剔除症状性条目、"
+                "合并重复、去\"？\"，不得从检查印象新增诊断）；诊断依据（逐条对应病例特点）；"
                 "鉴别诊断（2~3 个鉴别点，结合【写作规范要点】，source 用 gray）；"
                 "诊疗计划（护理级别、检查安排、治疗措施，结合规范要点，source 用 gray）。\n"
                 "输出 JSON：{\"fields\":[{\"label\":\"病例特点|初步诊断|诊断依据|鉴别诊断|诊疗计划\","
                 "\"value\":\"完整段落\",\"source\":\"green|gray\",\"basis\":\"依据摘要\",\"confidence\":0~1}]}"
                 " value 为完整病历正文段落（不是短语）。只输出 JSON。")
         else:
-            instruct = (
-                "从【对话要素】中逐一还原以下字段（每个要素必须被使用，不得遗漏可支撑的字段）："
-                "主诉；现病史（按 发病情况→症状特点→伴随症状→诊治经过→一般情况 组织成段）；"
-                "既往史（健康/疾病/手术外伤/过敏/接种逐项，答'无'的也写）；个人史；婚育史；家族史。\n"
-                "再从【结构化数据】还原：初步诊断/出院诊断（依据申请单临床诊断线索与检查印象归纳）；辅助检查结果（按日期逐条整理）。\n"
-                "输出 JSON：{\"fields\":[{\"label\":\"字段名\",\"value\":\"规范文本\",\"source\":\"green|blue\","
-                "\"basis\":\"依据摘要（引用要素/数据来源）\",\"confidence\":0~1}]}\n"
-                "要求：value 为完整病历正文表述（不是短语）；主诉=症状+持续时间；"
-                "要素为'无'的子项按'无××'规范表述写入对应节；没有材料支撑的字段不输出。只输出 JSON。")
+            if has_elements:
+                hist = ("从【对话要素】中逐一还原以下字段（每个要素必须被使用，不得遗漏可支撑的字段）："
+                        "主诉（症状+持续时间，规范表述，不得照抄口语）；"
+                        "现病史（按 发病情况→症状特点→伴随症状→诊治经过→一般情况 组织成段）；"
+                        "既往史（健康/疾病/手术外伤/过敏/接种逐项，答'无'的也写）；个人史；婚育史；家族史。\n")
+            else:
+                hist = ("本次无对话素材（无录音模式）：主诉、现病史、既往史、个人史、婚育史、家族史等病史字段"
+                        "一律不得输出——材料未提及铁律，不得从诊断线索反推编造病史。\n")
+            instruct = (hist
+                        + "再从【结构化数据】还原：辅助检查结果（按日期逐条整理）。\n"
+                        + _DX_RULE + "\n"
+                        + "输出 JSON：{\"fields\":[{\"label\":\"字段名\",\"value\":\"规范文本\",\"source\":\"green|blue\","
+                        "\"basis\":\"依据摘要（引用要素/数据来源）\",\"confidence\":0~1}]}\n"
+                        + "要求：value 为完整病历正文表述（不是短语）；"
+                        + ("要素为'无'的子项按'无××'规范表述写入对应节；" if has_elements else "")
+                        + "没有材料支撑的字段不输出。只输出 JSON。")
         messages = [
             {"role": "system", "content":
                 "你是本院病历书写智能体。铁律：只依据给定的【对话要素】与【结构化数据】书写，材料未提及的字段一律不输出；"
@@ -107,6 +156,9 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
             for f in data.get("fields", []):
                 label, value = str(f.get("label", "")).strip(), str(f.get("value", "")).strip()
                 if not label or not value: continue
+                if not has_elements and (label in HISTORY_LABELS or label in REASONING_LABELS):
+                    warnings.append(f"writer 硬拦截：无对话素材禁止生成「{label}」（不得从诊断反推编造）")
+                    continue
                 if re_match_coded(value):  # LLM 幻觉出纯编号 → 拦截
                     warnings.append(f"writer 输出疑似受控码被拦截：{label}")
                     continue
@@ -120,6 +172,9 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
             warnings.append(f"LLM 生成失败已降级（仅规则字段）：{e}")
     else:
         warnings.append("LLM 未配置：仅输出规则字段")
+    # 诊断兜底：LLM 未产出诊断（或不可用）时采用规则直填
+    if rule_dx and rule_dx["label"] not in [d["label"] for d in draft]:
+        draft.append(rule_dx)
     seen, uniq = set(), []
     for d in draft:
         if d["label"] in seen: continue

@@ -89,4 +89,6 @@ def from_patients_json(admission):
                             "units": l.get("units", ""), "ref": l.get("ref", "")}
                            for l in his.get("abnormal_labs") or []]
     ds["orders"] = [{"text": o.get("text", ""), "dose": "", "route": ""} for o in his.get("orders") or []]
+    # 临床诊断线索（P2-H 诊断规范改写的数据源）：demo 用病例 disease 字段，等价于院内申请单 CLIN_DIAG
+    ds["clinic_diags"] = [admission["disease"]] if admission.get("disease") else []
     return ds
