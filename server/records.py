@@ -70,23 +70,32 @@ def init_db():
 
 
 def _seed(cur):
-    """演示种子数据：让上级医师/质控科首次进入审签工作台即有真实可操作内容。"""
+    """演示种子数据：让上级医师/质控科首次进入审签工作台即有真实可操作内容；
+    修改留痕样例供「修改回流」视图（F8 数据闭环）演示。"""
+    demo_edits = [
+        {"field": "主诉", "before": "右下腹疼痛1月余", "after": "右下腹部疼痛1个月",
+         "time": "2026-09-29 10:12:00", "doctor": "王医生（演示）"},
+        {"field": "肝掌蜘蛛痣", "before": "无", "after": "无肝掌、蜘蛛痣",
+         "time": "2026-09-29 10:14:00", "doctor": "王医生（演示）"},
+    ]
     demo_fields = [
         {"label": "主诉", "value": "右下腹部疼痛1个月", "source": "green"},
         {"label": "现病史", "value": "患者于1个月前无明显诱因出现右下腹腹痛，为持续性钝痛……（演示数据节选）", "source": "green"},
         {"label": "体温", "value": "36.8", "source": "blue"},
         {"label": "脉搏", "value": "78", "source": "blue"},
         {"label": "发育", "value": "正常", "source": "gray"},
+        {"label": "肝掌蜘蛛痣", "value": "无肝掌、蜘蛛痣", "source": "gray"},
         {"label": "初步诊断", "value": "1.慢性阑尾炎", "source": "green"},
     ]
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     rows = [
         ("AR-20260929-0001", "DA0001", 1, "入院记录", "急性阑尾炎", 0, "王医生（演示）",
-         "signed", "李主任（演示）", "病例特点归纳完整，诊断依据充分，同意签发。", "合格", "甲级病历", now),
+         "signed", "李主任（演示）", "病例特点归纳完整，诊断依据充分，同意签发。", "合格", "甲级病历", now, demo_edits),
         ("AR-20260930-0002", "DA0001", 1, "首次病程记录", "急性阑尾炎", 0, "王医生（演示）",
-         "submitted", None, "", "", "", now),
+         "submitted", None, "", "", "", now,
+         [{"field": "体温", "before": "36.5", "after": "36.8", "time": "2026-09-30 09:40:00", "doctor": "王医生（演示）"}]),
     ]
-    for no, code, idx, doc, dis, rid, rname, st, sname, scomment, sres, scomment2, created in rows:
+    for no, code, idx, doc, dis, rid, rname, st, sname, scomment, sres, scomment2, created, edits in rows:
         total, yellow = len(demo_fields), 0
         cur.execute(f"INSERT INTO archives (record_no, patient_code, admission_idx, doc_type, disease, "
                     f"resident_id, resident_name, fields_json, qc_json, edits_json, xml_text, total_cnt, yellow_cnt, "
@@ -94,7 +103,7 @@ def _seed(cur):
                     f"VALUES ({Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q},{Q})",
                     (no, code, idx, doc, dis, rid, rname, json.dumps(demo_fields, ensure_ascii=False),
                      json.dumps({"summary": "通过 34 / 拦截修正 0 / 缺失待补 1 / 复核提示 2", "blocked": [], "missing": ["医生签名（须医生手工签章）"], "warnings": []}, ensure_ascii=False),
-                     "[]", "", total, yellow, st, sname, now if sname else None, scomment,
+                     json.dumps(edits, ensure_ascii=False), "", total, yellow, st, sname, now if sname else None, scomment,
                      "质控科（演示）" if sres else None, now if sres else None, sres, scomment2, created))
 
 
@@ -117,6 +126,87 @@ def _row_brief(r):
             "spot_comment": r["spot_comment"] or "", "created_at": str(r["created_at"] or "")}
 
 
+# ---------------- 修改回流分析（F8 数据闭环：医生修改留痕 → 模型反馈） ----------------
+# 四色分类与前端 colorOf 同规则（领域标签集为稳定数据，内置避免跨目录依赖）
+_GREEN_SET = set("主诉 主要症状 症状 持续时间 时间单位 现病史 发病情况 诱因 主要症状特点及其发展变化 伴随症状 上呼吸道症状 消化道症状 泌尿系症状 发病以来诊治经过及结果 发病以来一般情况 精神状态 食欲 睡眠 小便情况 大便情况 体重 与本次疾病无紧密关系的其他疾病情况 病史 既往史 疾病史（含外伤） 一般健康状况标志 健康状况 心血管病史 其他病史 肝炎结核病史 手术外伤输血 手术外伤史 过敏史 预防接种史 个人史 居住地 地址 接触史 疫区接触史 特殊地区居住史 有毒物质接触史 生活习惯、烟酒史 吸烟史 饮酒史 冶游史 婚育史 婚姻史 生育史 月经史 月经量 月经颜色 月经相关症状 家族史 家族健康状况 父母 兄弟姐妹 有无遗传倾向疾病 病史陈述者姓名 病史陈述者 查房记录 初步诊断 入院诊断 出院诊断 诊断依据 鉴别诊断 诊疗计划 诊疗经过 出院情况 出院医嘱 手术经过 术前诊断 术中诊断".split())
+_PE_SET = set("发育 营养 表情 面容 神志 体位 配合检查 色泽 肝掌蜘蛛痣 全身浅表淋巴结 头颅异常 眼睑水肿 结膜 巩膜 角膜 瞳孔 对光反射 外耳道 乳突 鼻 鼻窦 口唇 口腔粘膜 齿龈 咽部粘膜 扁桃体 颈部 颈 颈动脉 颈静脉 气管 肝颈静脉回流征 甲状腺 甲状腺异常 胸廓 胸骨叩痛 呼吸运动 呼吸规整 肋间隙 语颤 胸膜摩擦感 叩诊 呼吸音 干湿性罗音 心前区隆起 心律 心包摩擦音 腹外形 腹壁静脉曲张 腹部紧张度 压痛反跳痛 包块 肝脏 肠鸣音 直肠肛门 肛门生殖器 脊柱 脊柱畸形 四肢 专科情况 老中青 起病 护理级别 Padua评分".split())
+_VITALS_SET = set("体温 脉搏 呼吸 收缩压 舒张压".split())
+
+def field_color(label, binding="", value=""):
+    """与前端 colorOf 同规则：黄=空值/签名，绿=对话提炼，蓝=HIS 带入，灰=体格检查常规。"""
+    label = str(label or "")
+    if not str(value or "").strip() or "签名" in label:
+        return "yellow"
+    if label in _GREEN_SET:
+        return "green"
+    if label in ("记录时间", "辅助检查结果", "辅助检查") or label in _VITALS_SET:
+        return "blue"
+    if str(binding or "") == "Patient":
+        return "blue"
+    if label in _PE_SET or label.startswith("体格检查"):
+        return "gray"
+    return "green"
+
+_COLOR_NOTE = {
+    "green": "对话提炼被改多 → 抽取/提示词待优化",
+    "blue": "HIS 带入被改多 → 映射规则待校准",
+    "gray": "模板常规被改多 → 规范默认待核对",
+    "yellow": "待补字段被填写 → 录音依赖/补录流程",
+    "unknown": "字段未在模板中（新增/改标签）",
+}
+
+def do_edits(handler, u, qs):
+    """修改回流聚合（F8）：医生修改留痕 → 字段热点 + 四色来源 + 改前改后样例，用于模型反馈。"""
+    where, args = "", []
+    if u.get("role") not in ("attending", "qc"):
+        where = f"WHERE resident_id={Q}"
+        args = [u["id"]]
+    conn = auth._connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM archives {where} ORDER BY id DESC LIMIT 200", tuple(args))
+        rows = auth._rows(cur)
+    finally:
+        conn.close()
+    hot, by_color, recent, archives_with_edits, total_edits = {}, {}, [], 0, 0
+    for r in rows:
+        try:
+            edits = json.loads(r["edits_json"] or "[]")
+        except Exception:
+            edits = []
+        if not edits:
+            continue
+        archives_with_edits += 1
+        total_edits += len(edits)
+        try:
+            fields = json.loads(r["fields_json"] or "[]")
+        except Exception:
+            fields = []
+        binding_by_label = {str(f.get("label") or ""): (str(f.get("binding") or ""), f.get("value")) for f in fields if f.get("label")}
+        for e in edits:
+            label = str(e.get("field") or "（未命名字段）")
+            binding, fval = binding_by_label.get(label, ("", None))
+            color = field_color(label, binding, fval if fval is not None else e.get("after"))
+            by_color[color] = by_color.get(color, 0) + 1
+            h = hot.setdefault(label, {"label": label, "count": 0, "color": color, "samples": []})
+            h["count"] += 1
+            if len(h["samples"]) < 2:
+                h["samples"].append({"before": str(e.get("before") or "")[:80], "after": str(e.get("after") or "")[:80],
+                                     "record_no": r["record_no"], "doc_type": r["doc_type"],
+                                     "at": str(e.get("time") or r["created_at"] or "")})
+            recent.append({"record_no": r["record_no"], "doc_type": r["doc_type"], "field": label,
+                           "before": str(e.get("before") or "")[:60], "after": str(e.get("after") or "")[:60],
+                           "doctor": str(e.get("doctor") or ""), "at": str(e.get("time") or "")})
+    hot_list = sorted(hot.values(), key=lambda x: -x["count"])[:12]
+    recent = sorted(recent, key=lambda x: x["at"] or "", reverse=True)[:10]
+    handler._json(200, {
+        "ok": True, "role": u.get("role") or "resident",
+        "totals": {"archives_with_edits": archives_with_edits, "edits": total_edits, "fields_touched": len(hot)},
+        "by_color": by_color, "color_note": _COLOR_NOTE,
+        "hot": hot_list, "recent": recent,
+    })
+
+
 # ---------------- 路由入口（由 llm_api.py 调用） ----------------
 def _qs(handler_path):
     """从请求路径解析查询参数（无查询串时返回空 dict）。"""
@@ -135,6 +225,7 @@ def handle(handler, body, path_override=None):
         ("POST", "/submit"): lambda: do_submit(handler, body, u),
         ("GET", "/"): lambda: do_list(handler, u, _qs(handler.path)),
         ("GET", "/detail"): lambda: do_detail(handler, u, _qs(handler.path)),
+        ("GET", "/edits"): lambda: do_edits(handler, u, _qs(handler.path)),
         ("POST", "/review"): lambda: do_review(handler, body, u),
         ("POST", "/spotcheck"): lambda: do_spotcheck(handler, body, u),
     }

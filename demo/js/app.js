@@ -1110,6 +1110,7 @@ const RV_STATUS = {
 };
 const RV_SPOT = { ok: { name: "抽查合格", fg: "var(--green)" }, issue: { name: "抽查缺陷", fg: "var(--red)" } };
 let rvFilter = "";
+let rvView = "list";   // 审签工作台视图：list=文书列表 / edits=修改回流（F8）
 
 function viewReview(){
   if (!S.user){ location.hash = "#/login"; return; }
@@ -1118,7 +1119,8 @@ function viewReview(){
     ? `<div class="notice" style="margin-top:18px">您处于<b>演示模式</b>——审签工作台需医生账号。请退出后登录，或分别注册「上级医师」「质控科」角色体验完整审签流（归档提交也需账号）。</div>`
     : "";
   const tabs = ["", "submitted", "signed", "rejected"].map(s =>
-    `<a class="rv-tab ${rvFilter === s ? "on" : ""}" onclick="rvSetFilter('${s}')">${s ? RV_STATUS[s].name : "全部"} </a>`).join("");
+    `<a class="rv-tab ${rvView === "list" && rvFilter === s ? "on" : ""}" onclick="rvSetFilter('${s}')">${s ? RV_STATUS[s].name : "全部"} </a>`).join("")
+    + `<a class="rv-tab ${rvView === "edits" ? "on" : ""}" onclick="rvSetView('edits')">🔄 修改回流</a>`;
   $app.innerHTML = `
     <div class="page-head">
       <div class="page-title">审签工作台<small>${
@@ -1130,17 +1132,89 @@ function viewReview(){
     ${head}
     <div id="rv-body" style="${S.user.demo ? "display:none" : ""}">
       <div class="rv-tabs">${tabs}</div>
+      ${rvView === "edits" ? `
+      <div id="rv-edits" style="text-align:center;padding:28px;color:var(--ink-3)">加载修改回流…</div>` : `
       <div id="rv-stats" class="rv-stats"></div>
       <div class="card" style="padding:0;overflow:hidden">
         <table class="fm rv-table">
           <thead><tr><th>归档编号</th><th>文书 / 病种</th><th>书写医生</th><th>字段（黄/总）</th><th>审签状态</th><th>抽查</th><th>提交时间</th><th style="width:90px">操作</th></tr></thead>
           <tbody id="rv-rows"><tr><td colspan="8" style="text-align:center;padding:28px;color:var(--ink-3)">加载中…</td></tr></tbody>
         </table>
-      </div>
+      </div>`}
     </div>`;
-  if (!S.user.demo) loadReviewList();
+  if (!S.user.demo){
+    if (rvView === "edits") loadReviewEdits();
+    else loadReviewList();
+  }
 }
-function rvSetFilter(s){ rvFilter = s; viewReview(); }
+function rvSetFilter(s){ rvFilter = s; rvView = "list"; viewReview(); }
+function rvSetView(v){ rvView = v; viewReview(); }
+
+/* 修改回流（F8 数据闭环）：医生修改留痕聚合 → 字段热点 + 四色来源 → 模型反馈 */
+const RV_COLOR = {
+  green: { dot: "green", note: "对话提炼被改多 → 抽取/提示词待优化" },
+  blue:  { dot: "blue",  note: "HIS 带入被改多 → 映射规则待校准" },
+  gray:  { dot: "gray",  note: "模板常规被改多 → 规范默认待核对" },
+  yellow:{ dot: "yellow",note: "待补字段被填写 → 录音依赖/补录流程" },
+  unknown:{ dot: "gray", note: "字段未在模板中（新增/改标签）" }
+};
+async function loadReviewEdits(){
+  const box = document.getElementById("rv-edits");
+  if (!box) return;
+  try{
+    const r = await fetch("api/records/edits");
+    if (r.status === 401){ S.user = null; renderUserArea(); location.hash = "#/login"; return; }
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "加载失败");
+    const t = d.totals || {}, bc = d.by_color || {}, note = d.color_note || {};
+    const hot = d.hot || [], recent = d.recent || [];
+    const colorChips = ["green","blue","gray","yellow","unknown"].filter(c => bc[c])
+      .map(c => `<span class="tag" style="background:var(--paper-2);color:var(--ink-2)"><span class="cdot ${RV_COLOR[c].dot}"></span>${({green:"绿·对话",blue:"蓝·HIS",gray:"灰·模板",yellow:"黄·待补",unknown:"未在模板"})[c]} <b>${bc[c]}</b><small style="color:var(--ink-3)">（${esc(note[c] || RV_COLOR[c].note)}）</small></span>`).join("");
+    box.innerHTML = `
+      <div class="rv-stats">
+        <span class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)">修改总次数 <b>${t.edits || 0}</b></span>
+        <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">涉及归档 <b>${t.archives_with_edits || 0}</b></span>
+        <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">涉及字段 <b>${t.fields_touched || 0}</b></span>
+        <button class="mini-btn" style="margin-left:auto" onclick="downloadEditsPack()">⬇ 下载修改回流包（模型反馈用）</button>
+      </div>
+      ${colorChips ? `<div class="rv-stats">${colorChips}</div>` : ""}
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px">
+        <table class="fm rv-table">
+          <thead><tr><th>字段热点</th><th>来源</th><th>修改次数</th><th>典型改前 → 改后</th></tr></thead>
+          <tbody>${hot.length ? hot.map(h => `
+            <tr>
+              <td><b>${esc(h.label)}</b></td>
+              <td><span class="cdot ${RV_COLOR[h.color]?.dot || "gray"}"></span> ${({green:"绿·对话",blue:"蓝·HIS",gray:"灰·模板",yellow:"黄·待补",unknown:"未在模板"})[h.color] || h.color}</td>
+              <td><b>${h.count}</b></td>
+              <td style="color:var(--ink-2)">${h.samples && h.samples.length ? h.samples.slice(0, 1).map(sm =>
+                `<span style="color:var(--red)">「${esc(sm.before || "（空）")}」</span> → <span style="color:var(--green)">「${esc(sm.after || "（空）")}」</span>
+                 <span style="color:var(--ink-3);font-size:10.5px">（${esc(sm.record_no)} · ${esc((sm.at || "").slice(0, 16))}）</span>`).join("") : "—"}</td>
+            </tr>`).join("") : `<tr><td colspan="4" style="text-align:center;padding:28px;color:var(--ink-3)">暂无修改留痕——医生在「四色确认」步骤的每次修改（改前/改后/字段/时间）会随归档包入库并聚合在此</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div class="md-title" style="font-size:14px;margin:2px 0 8px">最近修改流（跨归档 · 按时间倒序）</div>
+      <div class="card" style="padding:12px 16px">${recent.length ? recent.map(e => `
+        <div style="font-size:12.5px;line-height:1.9;color:var(--ink-2)">
+          <span class="mono" style="color:var(--ink-3)">${esc(e.record_no)}</span> · ${esc(e.doc_type)} · <b>${esc(e.field)}</b>：
+          <span style="color:var(--red)">「${esc(e.before || "（空）")}」</span>→<span style="color:var(--green)">「${esc(e.after || "（空）")}」</span>
+          <span style="color:var(--ink-3)">· ${esc(e.doctor || "")} · ${esc((e.at || "").slice(0, 16))}</span>
+        </div>`).join("") : `<span style="color:var(--ink-3);font-size:12.5px">（暂无）</span>`}</div>
+      <div class="notice" style="margin-top:14px">🔁 <b>回流用途</b>：修改热点是模型迭代的直接依据——绿字段热点指向抽取/提示词优化，蓝字段热点指向 HIS 映射校准，灰字段热点指向模板常规核对；随双周回归对照热点是否收敛（PRD F8 数据闭环）。</div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="notice">⚠ ${esc(e.message || e)}</div>`;
+  }
+}
+async function downloadEditsPack(){
+  try{
+    const r = await fetch("api/records/edits");
+    const d = await r.json();
+    const blob = new Blob([JSON.stringify(d, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `修改回流包_模型反馈_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) { alert("下载失败：" + (e.message || e)); }
+}
 async function loadReviewList(){
   const body = document.getElementById("rv-body");
   if (!body) return;
