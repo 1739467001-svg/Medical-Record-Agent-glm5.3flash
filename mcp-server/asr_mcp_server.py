@@ -112,6 +112,49 @@ class Transcript:
                 "text": self.text, "language": "zh",
                 "segments": self.segments, "mock": self.mock, "warnings": self.warnings}
 
+# ---------------- 医疗热词后处理（PRD D4：同音听错纠正，保守短语规则） ----------------
+_HOTWORDS_CACHE = None
+
+def _load_hotwords():
+    """加载热词表：mcp-server/medical_hotwords.json（种子）或 MRA_MEDICAL_HOTWORDS 指定的扩展文件。"""
+    global _HOTWORDS_CACHE
+    if _HOTWORDS_CACHE is not None:
+        return _HOTWORDS_CACHE
+    path = os.environ.get("MRA_MEDICAL_HOTWORDS") or \
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "medical_hotwords.json")
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+        _HOTWORDS_CACHE = {str(k): str(v) for k, v in
+                           (data.get("规则（勿改本键）") or data).items() if not str(k).startswith("_") and not str(k).startswith("规则")}
+    except Exception as e:
+        _HOTWORDS_CACHE = {}
+        print(f"[asr] 热词表加载失败（空表继续）: {e}", file=sys.stderr)
+    return _HOTWORDS_CACHE
+
+def correct_hotwords(transcript):
+    """对 Transcript 应用热词修正（全文+分段同步，warnings 留痕）。返回 (transcript, 修正清单)。
+    设计约束：只修 ASR 听错（同音字），不做规范用语改写——保持绿字段可溯源到医生实际说出的话。"""
+    rules = _load_hotwords()
+    if not rules:
+        return transcript, []
+    applied = []
+    text = transcript.text
+    for wrong, right in sorted(rules.items(), key=lambda kv: -len(kv[0])):
+        n = text.count(wrong)
+        if n:
+            text = text.replace(wrong, right)
+            applied.append(f"{wrong}→{right}×{n}")
+    if applied:
+        transcript.text = text
+        for seg in transcript.segments:
+            t = str(seg.get("text", ""))
+            for wrong, right in sorted(rules.items(), key=lambda kv: -len(kv[0])):
+                t = t.replace(wrong, right)
+            seg["text"] = t
+        transcript.warnings = (transcript.warnings or []) + ["医疗热词修正：" + "；".join(applied)]
+    return transcript, applied
+
+
 class BaseEngine:
     name = "base"
     def configured(self): raise NotImplementedError

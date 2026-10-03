@@ -69,6 +69,15 @@ def main():
     ref = "".join(m["text"] for m in marks)
     c = cer(ref, hyp)
     dur = sum(m["end"] - m["start"] for m in marks)
+    # 热词修正留痕（asr_ingest 写入的转写 json.warnings）
+    hot_note = ""
+    try:
+        tj = json.load(open(txt_path.replace(".txt", ".json"), encoding="utf-8"))
+        hw = [w for w in (tj.get("warnings") or []) if "热词" in w]
+        if hw:
+            hot_note = f"（医疗热词修正 {len(hw)} 条：{hw[0][:80]}…）"
+    except Exception:
+        pass
 
     # ---- 模式A vs 模式C（同文书同金标准，唯一变量=有无转写稿） ----
     import tempfile
@@ -118,10 +127,10 @@ def main():
         "| 步骤 | 结果 |", "|---|---|",
         "| 1 音频合成 | ✓ 26 轮双声对话，122s，16kHz/单声道/16bit |",
         "| 2 落位校验 | ✓ 格式达标 1/1，命名告警 0（`落位报告.md` 在彩排目录） |",
-        f"| 3 本地转写 | ✓ local-whisper(small)，转写 {len(hyp)} 字，耗时见转写稿目录 |",
+        f"| 3 本地转写 | ✓ local-whisper(small)，转写 {len(hyp)} 字 {hot_note} |",
         f"| 4 模式C 生成 | ✓ 六智能体流水线带转写稿跑通（DeepSeek），{rc['seconds']}s |", "",
         "## 二、转写质量（合成普通话音频）", "",
-        f"- 字错率（CER，去标点近似）：**{c*100:.1f}%**（对 26 轮标准答案）",
+        f"- 字错率（CER，去标点近似）：**{c*100:.1f}%**（对 26 轮标准答案，热词修正后）",
         "- 角色：无说话人分离（local-whisper 不带角色分离，与引擎文档一致）；云端引擎角色分离能力待真实录音联调。", "",
         "## 三、生成对照（模式A 无录音 vs 模式C 喂转写稿）", "",
         "| 指标 | 模式A（无录音） | 模式C（ASR 转写稿） | 变化 |", "|---|---|---|---|",

@@ -254,9 +254,11 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(raw)
             engine = asr_mcp_server.pick_engine(None)
             t = engine.transcribe(tmp, speakers=bool(body.get("speakers", True)))
+            t, _hot = asr_mcp_server.correct_hotwords(t)
             d = t.to_dict()
             auth.audit_log(u, "asr_transcribe", filename,
-                           f"engine={d['engine']}·时长{d.get('duration_sec') or '?'}s·{len(d.get('segments') or [])}段")
+                           f"engine={d['engine']}·时长{d.get('duration_sec') or '?'}s·{len(d.get('segments') or [])}段"
+                           + (f"·热词{len(_hot)}" if _hot else ""))
             return self._json(200, {"ok": True, "engine": d["engine"], "text": d["text"],
                                     "segments": d["segments"], "duration_sec": d.get("duration_sec"),
                                     "mock": bool(d.get("mock")), "warnings": d.get("warnings") or [],

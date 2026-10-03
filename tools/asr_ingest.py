@@ -132,6 +132,7 @@ def _load_engine(engine_name):
 
 def cmd_transcribe(audio_dir, engine_name):
     engine = _load_engine(engine_name)
+    import asr_mcp_server   # _load_engine 已把 mcp-server 加入 sys.path（热词后处理用）
     rows, _ = scan(audio_dir)
     targets = [r for r in rows if r["ok"] == "✓"]
     if not targets:
@@ -145,7 +146,10 @@ def cmd_transcribe(audio_dir, engine_name):
         t0 = time.time()
         try:
             t = engine.transcribe(src, speakers=True)
+            t, _hot = asr_mcp_server.correct_hotwords(t)
             d = t.to_dict()
+            if _hot:
+                print(f"    热词修正 {len(_hot)} 处：{'；'.join(_hot)}")
             with open(os.path.join(out_dir, base + ".txt"), "w", encoding="utf-8") as f:
                 f.write(d.get("text") or "")
             with open(os.path.join(out_dir, base + ".json"), "w", encoding="utf-8") as f:
