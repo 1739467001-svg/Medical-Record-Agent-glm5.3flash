@@ -22,4 +22,4 @@ node_modules/
 venv/
 tmp/
 evaluation/.llm_env
-server/local_dev.db
+server/local_dev*.db

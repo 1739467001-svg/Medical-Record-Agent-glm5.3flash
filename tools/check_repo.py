@@ -28,8 +28,8 @@ def run(cmd, cwd=REPO, timeout=180):
 
 PY_DIRS = ("server", "evaluation", "mcp-server")
 JS_MAIN = os.path.join(REPO, "demo", "js", "app.js")
-FORBIDDEN_TRACKED = ("local_dev.db", ".llm_env", "病历资料/", "9.24/", "9.25/")
-GITIGNORE_LINES = ("local_dev.db", ".llm_env", "病历资料", "9.24", "9.25")
+FORBIDDEN_TRACKED = ("local_dev", ".llm_env", "病历资料/", "9.24/", "9.25/")
+GITIGNORE_LINES = ("local_dev", ".llm_env", "病历资料", "9.24", "9.25")
 
 # ---------------- [1] 编译与语法 ----------------
 def check_compile():
