@@ -121,6 +121,20 @@ def check_leaks():
         for m in re.findall(r"sk-[A-Za-z0-9_\-]{20,}", text):
             suspects.append(f"{t}: {m[:12]}…")
     report(4, "被跟踪文件无疑似密钥", not suspects, "; ".join(suspects[:3]))
+    # 真实姓名映射防回归：患者代号映射必须走 git 忽略文件，不允许硬编码进代码
+    # （2026-10-03 发现 PATIENT_CODE 字典把真实姓名写进了已提交的 evaluate_v0.py）
+    hard_coded = []
+    for t in tracked:
+        if not t.endswith(".py"):
+            continue
+        try:
+            text = open(os.path.join(REPO, t), encoding="utf-8", errors="ignore").read(20000)
+        except Exception:
+            continue
+        # 字面量中文键（{"某姓名": "患者A"}）才算硬编码；目录序推导的字典推导式是合法兜底
+        if re.search(r'PATIENT_CODE\s*=\s*\{\s*["\'][\u4e00-\u9fff]+["\']\s*:', text):
+            hard_coded.append(t)
+    report(4, "患者姓名映射未硬编码（走 git 忽略文件）", not hard_coded, "; ".join(hard_coded[:3]))
 
 # ---------------- [5] 文档数字防漂移 ----------------
 def readme_claims():

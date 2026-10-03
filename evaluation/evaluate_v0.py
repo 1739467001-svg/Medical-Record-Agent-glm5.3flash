@@ -22,7 +22,28 @@ import xml.etree.ElementTree as ET
 import xlrd
 
 XSI = '{http://www.w3.org/2001/XMLSchema-instance}type'
-PATIENT_CODE = {"张俊杰": "患者A", "荣玉民": "患者B", "刘倩倩": "患者C", "麻玉兰": "患者D", "闫秋荣": "患者E"}
+# 患者代号映射（数据安全红线：真实姓名不入 Git，2026-10-03 修复）——
+# 从 git 忽略文件 病历资料/患者代号映射.json 读取，格式 {"真实姓名": "患者A", ...}；
+# 缺失时按目录名字典序兜底映射 患者A/B/C…（顺序可能与既往报告不一致，会告警）。
+_PATIENT_CODE = None
+
+def _patient_code_map():
+    global _PATIENT_CODE
+    if _PATIENT_CODE is not None:
+        return _PATIENT_CODE
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mfile = os.path.join(root, "病历资料", "患者代号映射.json")
+    base = os.path.join(root, "病历资料", "住院")
+    if os.path.exists(mfile):
+        _PATIENT_CODE = json.load(open(mfile, encoding="utf-8"))
+    else:
+        folders = sorted(d for d in os.listdir(base)
+                         if os.path.isdir(os.path.join(base, d))) if os.path.isdir(base) else []
+        _PATIENT_CODE = {f: f"患者{chr(ord('A') + i)}" for i, f in enumerate(folders)}
+        if folders:
+            print(f"[evaluate_v0] ⚠ 未找到 患者代号映射.json，按目录序兜底映射（可能影响与既往报告的对齐）",
+                  file=sys.stderr)
+    return _PATIENT_CODE
 NUMERIC_LABELS = {"体温", "脉搏", "呼吸", "收缩压", "舒张压", "数字"}
 
 # ---------------- 字段分类（与 Demo 前端 colorOf 同一套规则） ----------------
@@ -75,7 +96,7 @@ def discover_docs(base_dir, workdir, types=("入院记录", "出院记录", "首
     fname_map = {"入院记录": "入院记录_*.xml", "出院记录": "出院记录_*.xml",
                  "首次病程记录": "病程记录_首次病程记录_*.xml"}
     results = []
-    for folder, code in PATIENT_CODE.items():
+    for folder, code in _patient_code_map().items():
         pdir = os.path.join(base_dir, folder)
         if not os.path.isdir(pdir): continue
         zips = sorted(glob.glob(os.path.join(pdir, "*.zip")))

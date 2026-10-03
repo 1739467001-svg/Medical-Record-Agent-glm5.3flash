@@ -2,6 +2,9 @@
 """多智能体生成器（评测适配层）：与 generate_v0 同契约接入 evaluate_v0。
 模式A（默认）：无录音——transcript 为空，仅 HIS 可推导字段（病史类字段 writer 硬拦截，不编造）。
 模式B：--mode B 时给 extractor 喂模拟对话（demo/data/dialogue.json，按金标准反构）。
+模式C（录音链路彩排，P2-O）：transcript 来自 ASR 转写稿文件——env
+MULTIAGENT_MODE=C + REHEARSAL_TRANSCRIPT=<转写.txt 路径>（tools/asr_ingest.py 产物）。
+真实录音到位后同一路径即插即跑（asr_ingest --transcribe → 本模式评测）。
 
 P2-H 住院次限定：病历资料目录的 HIS 视图为患者级导出，多次住院的申请单诊断/检查/医嘱
 混在一起，曾导致初步诊断跨住院次张冠李戴（评测 ×11 未命中的主因之一）。此处按文书名
@@ -61,7 +64,15 @@ def _filter_views_by_stay(views, stay_dt, doc_type):
 
 def generate(gold_fields, views, anchor="入院", doc_type="入院记录", stay_dt=None):
     labels = {f["label"] for f in gold_fields}
-    transcript = _dialogue() if (_MODE == "B" and doc_type == "入院记录") else None
+    transcript = None
+    if _MODE == "B" and doc_type == "入院记录":
+        transcript = _dialogue()
+    elif _MODE == "C":
+        p = os.environ.get("REHEARSAL_TRANSCRIPT", "")
+        if p and os.path.exists(p):
+            transcript = open(p, encoding="utf-8").read().strip()
+        elif p:
+            print(f"[mode-C] 转写稿不存在：{p}（降级为无录音模式）", file=sys.stderr)
     r = run_pipeline(transcript=transcript, his_views=_filter_views_by_stay(views, stay_dt, doc_type),
                      doc_type=doc_type, target_labels=labels)
     gen = {}

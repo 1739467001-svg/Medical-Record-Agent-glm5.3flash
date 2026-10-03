@@ -236,6 +236,28 @@ class LocalWhisperEngine(BaseEngine):
         return {"ready": self.configured(),
                 "note": "faster-whisper 本地转写：无外呼、适合研发期与私有化对照；不带医生/患者角色分离（后处理区分）",
                 "env": ["ASR_LOCAL_MODEL"], "deps": "pip install faster-whisper"}
+    @staticmethod
+    def _wav_to_float32(path):
+        """16kHz 单声道 PCM WAV 直读为 float32（标准库 wave，免 PyAV/ffmpeg）。
+        非 16k/立体声用 audioop 重采样混单；非 WAV 或非 PCM 交给 PyAV 兜底。"""
+        import wave, audioop
+        try:
+            with wave.open(path, "rb") as w:
+                if w.getcomptype() != "NONE":
+                    raise wave.Error("compressed wav")
+                rate, ch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth()
+                raw = w.readframes(w.getnframes())
+        except (wave.Error, EOFError):
+            return None, None
+        if sw != 2:
+            return None, None
+        if ch != 1:
+            raw = audioop.tomono(raw, 2, 0.5, 0.5)
+        if rate != 16000:
+            raw, _ = audioop.ratecv(raw, 2, 1, rate, 16000, None)
+        import numpy as np
+        return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0, 16000
+
     def transcribe(self, audio_path, speakers=True, **opts):
         if not self.configured():
             raise RuntimeError("本地引擎未配置：请设置 ASR_LOCAL_MODEL（如 base / medium / 模型路径）")
@@ -244,7 +266,12 @@ class LocalWhisperEngine(BaseEngine):
         except ImportError:
             raise RuntimeError("缺少依赖：pip install faster-whisper")
         model = WhisperModel(os.environ["ASR_LOCAL_MODEL"], device="cpu", compute_type="int8")
-        seg_iter, info = model.transcribe(audio_path, language="zh", vad_filter=True)
+        # WAV 直读优先（解除 PyAV metadata_errors 不兼容与 ffmpeg 依赖）；其他格式回退 PyAV
+        pcm, rate = self._wav_to_float32(audio_path)
+        if pcm is not None:
+            seg_iter, info = model.transcribe(pcm, language="zh", vad_filter=True)
+        else:
+            seg_iter, info = model.transcribe(audio_path, language="zh", vad_filter=True)
         segs = [{"start": round(s.start, 2), "end": round(s.end, 2), "speaker": "未分离" if speakers else "-", "text": s.text.strip()}
                 for s in seg_iter]
         return Transcript("local-whisper", audio_path, "".join(s["text"] for s in segs), segs,

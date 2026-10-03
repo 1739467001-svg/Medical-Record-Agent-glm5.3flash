@@ -56,6 +56,11 @@ python3 tools/asr_ingest.py 病历资料/录音 --transcribe    # 批量转写�
 # 评测趋势汇总（P2-M）：历次回归报告 → 覆盖率/准确率跨期对照表（双周汇报用）
 python3 evaluation/trend_report.py
 
+# 录音链路彩排（P2-O，无真实录音预演全链路；音频/转写稿只落 git 忽略目录）
+python3 tools/make_rehearsal_audio.py                       # ① 合成双声问诊音频（macOS，脱敏对话稿，声部自动探测）
+ASR_LOCAL_MODEL=small python3 tools/asr_ingest.py 病历资料/彩排录音 --transcribe --engine local-whisper  # ② 本地转写（数据不出机）
+python3 evaluation/rehearsal_mode_c.py                      # ③ 模式A/C 对照评测 + 字错率 → docs/录音链路彩排报告.md
+
 # 演示动线与降级预案（院方汇报用，docs/）
 # docs/演示脚本_5分钟.md —— 预检清单 → 5 分钟动线 → 量化结论 → 降级预案 → Q&A
 
