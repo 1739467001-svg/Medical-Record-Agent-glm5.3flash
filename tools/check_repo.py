@@ -7,7 +7,7 @@
   [2] 前后端 API 契约 app.js 的 fetch/authPost 调用 ⊆ 服务端注册路由（auth/records 路由表 + llm_api 字面量）
   [3] onclick 引用    app.js onclick 引用的函数必须已定义（模板字符串改动后防手滑）
   [4] 数据泄漏防护    .gitignore 红线（local_dev.db/.llm_env/病历资料 等）未被 git 跟踪；
-                     全部被跟踪文件内容无疑似密钥（sk-…）
+                     全部被跟踪文件内容无疑似密钥（sk-…）；患者真名零入库（代号映射×被跟踪文本）
   [5] 文档数字防漂移  README 宣称的"单测 N 项 / 冒烟 N 项"与实际运行结果一致
   [6] 运行环境        Python 版本、pymysql vendor、演示数据 JSON 可解析
 
@@ -135,6 +135,32 @@ def check_leaks():
         if re.search(r'PATIENT_CODE\s*=\s*\{\s*["\'][\u4e00-\u9fff]+["\']\s*:', text):
             hard_coded.append(t)
     report(4, "患者姓名映射未硬编码（走 git 忽略文件）", not hard_coded, "; ".join(hard_coded[:3]))
+
+    # 真实姓名零入库扫描（患者F 接入时发现存量泄漏后新增）：代号映射的真实姓名键
+    # 不得出现在任何被跟踪文本文件里（含 demo 数据自由文本——既往脱敏只替换结构化列，
+    # 曾漏掉出院医嘱正文里的医护真名）。映射文件本身在 git 忽略区，仅本地体检可用。
+    map_file = os.path.join(REPO, "病历资料", "患者代号映射.json")
+    real_names = []
+    if os.path.exists(map_file):
+        try:
+            real_names = [k for k in json.load(open(map_file, encoding="utf-8"))
+                          if isinstance(k, str) and len(k) >= 2]
+        except Exception:
+            real_names = []
+    leaked = []
+    if real_names:
+        for t in tracked:
+            if not t.endswith((".py", ".json", ".md", ".js", ".html", ".txt", ".yml", ".yaml", ".css", ".csv")):
+                continue
+            try:
+                text = open(os.path.join(REPO, t), encoding="utf-8", errors="ignore").read()
+            except Exception:
+                continue
+            for nm in real_names:
+                if nm in text:
+                    leaked.append(f"{t}:{nm}")
+        report(4, f"患者真名零入库（映射 {len(real_names)} 名 × 被跟踪文本）", not leaked,
+               "; ".join(leaked[:5]))
 
 # ---------------- [5] 文档数字防漂移 ----------------
 def readme_claims():

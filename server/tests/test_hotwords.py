@@ -94,5 +94,43 @@ class TestWavDirectRead(unittest.TestCase):
         self.assertIsNone(rate)
 
 
+class TestDialectVariants(unittest.TestCase):
+    """患者F 首例真实方言录音沉淀：同音错字"变体族"修正 + 领域提示安全边界。"""
+
+    def setUp(self):
+        asr._HOTWORDS_CACHE = None
+        asr._PROMPT_CACHE = None
+
+    def tearDown(self):
+        asr._HOTWORDS_CACHE = None
+        asr._PROMPT_CACHE = None
+
+    def test_xiaoyanzhen_variant_family(self):
+        """消炎针变体族（实测 6 种误识形态）全部归一。"""
+        for wrong in ("小院人", "小阳人", "小眼人", "小眼帘", "小眼脸", "小眼点"):
+            t, applied = asr.correct_hotwords(make_transcript(f"打了个小{wrong[1:]}"))
+            self.assertIn("消炎针", t.text, f"{wrong} 未修正")
+
+    def test_tige_to_tige(self):
+        t, _ = asr.correct_hotwords(make_transcript("平时提个挺好，踢个还行"))
+        self.assertEqual(t.text, "平时体格挺好，体格还行")
+
+    def test_medical_prompt_short_default(self):
+        """默认领域提示必须是短主题式（实测长词表诱发 whisper 幻觉），且含关键锚定词。"""
+        p = asr._medical_prompt()
+        self.assertLessEqual(len(p), 220)
+        self.assertIn("问诊", p)
+        self.assertIn("消炎针", p)
+
+    def test_medical_prompt_override_and_cache(self):
+        os.environ["ASR_LOCAL_PROMPT"] = "自定义提示"
+        try:
+            self.assertEqual(asr._medical_prompt(), "自定义提示")
+            self.assertEqual(asr._medical_prompt(), "自定义提示")  # 缓存命中不重算
+        finally:
+            os.environ.pop("ASR_LOCAL_PROMPT", None)
+            asr._PROMPT_CACHE = None
+
+
 if __name__ == "__main__":
     unittest.main()

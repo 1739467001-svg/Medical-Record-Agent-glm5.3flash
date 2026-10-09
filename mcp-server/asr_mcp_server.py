@@ -131,6 +131,26 @@ def _load_hotwords():
         print(f"[asr] 热词表加载失败（空表继续）: {e}", file=sys.stderr)
     return _HOTWORDS_CACHE
 
+_PROMPT_CACHE = None
+
+def _medical_prompt():
+    """本地引擎的领域提示（initial_prompt）：引导声学模型偏向医患问诊语域。
+    实测依据（患者F 首例真实方言录音，三轮 A/B）：
+      - 短主题式提示（~45字）最优："消炎针"直接识别正确、标点完整、无首尾幻觉；
+      - 长词表提示（>100字）反而诱发首尾幻觉（"七十年前"/"字幕by…"），不采用；
+      - 无提示时出现重复循环（同句×7），配合 condition_on_previous_text=False 消除。
+    按案例定制：case_ingest 可用申请单诊断构造 ASR_LOCAL_PROMPT（如含"阑尾炎"时识别最佳）。"""
+    global _PROMPT_CACHE
+    if _PROMPT_CACHE is not None:
+        return _PROMPT_CACHE
+    override = os.environ.get("ASR_LOCAL_PROMPT")
+    if override:
+        _PROMPT_CACHE = override[:220]
+        return _PROMPT_CACHE
+    _PROMPT_CACHE = ("以下是医患问诊对话，含山东方言口音，涉及腹痛、发热、恶心呕吐、"
+                     "消炎针、输液、手术、住院。")
+    return _PROMPT_CACHE
+
 def correct_hotwords(transcript):
     """对 Transcript 应用热词修正（全文+分段同步，warnings 留痕）。返回 (transcript, 修正清单)。
     设计约束：只修 ASR 听错（同音字），不做规范用语改写——保持绿字段可溯源到医生实际说出的话。"""
@@ -311,10 +331,12 @@ class LocalWhisperEngine(BaseEngine):
         model = WhisperModel(os.environ["ASR_LOCAL_MODEL"], device="cpu", compute_type="int8")
         # WAV 直读优先（解除 PyAV metadata_errors 不兼容与 ffmpeg 依赖）；其他格式回退 PyAV
         pcm, rate = self._wav_to_float32(audio_path)
-        if pcm is not None:
-            seg_iter, info = model.transcribe(pcm, language="zh", vad_filter=True)
-        else:
-            seg_iter, info = model.transcribe(audio_path, language="zh", vad_filter=True)
+        kw = dict(language="zh", vad_filter=True,
+                  initial_prompt=_medical_prompt(),
+                  # 真实方言录音实测（患者F）：条件于上文会诱发重复循环（同句×7），关闭后消除
+                  condition_on_previous_text=False)
+        src = pcm if pcm is not None else audio_path
+        seg_iter, info = model.transcribe(src, **kw)
         segs = [{"start": round(s.start, 2), "end": round(s.end, 2), "speaker": "未分离" if speakers else "-", "text": s.text.strip()}
                 for s in seg_iter]
         return Transcript("local-whisper", audio_path, "".join(s["text"] for s in segs), segs,

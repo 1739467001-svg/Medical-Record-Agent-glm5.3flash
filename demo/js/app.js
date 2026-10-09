@@ -7,6 +7,9 @@
 const $app = document.getElementById("app");
 const S = {
   patients: [], dialogue: [], fieldmap: null,
+  dialogueDefault: [],   // 默认演示对话（dialogue.json）
+  dialogueByFile: {},    // 按患者对话文件缓存（真实案例 dialogue_DA0006.json …，case_ingest 产出）
+  curKey: "DA0001_1",    // 当前交互流程 key（确认/归档/导出等全局回调共用，进入住院工作区时更新）
   flow: {},          // flowKey -> {step, revealed, transcriptDone, agentN, edits:{}, archived:false}
   timers: [],
   user: null,        // 当前登录用户（api/auth/me 返回）；null = 未登录
@@ -15,6 +18,12 @@ const S = {
 /* ---------------- 工具 ---------------- */
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const flowKey = (code, idx) => `${code}_${idx}`;
+const keyCode = key => key.slice(0, key.lastIndexOf("_"));
+const keyIdx = key => parseInt(key.slice(key.lastIndexOf("_") + 1), 10);
+function viewAdmissionKey(key){ viewAdmission(keyCode(key), keyIdx(key)); }
+// 交互流程资格（平台化，患者F 接入时数据驱动化）：住院次带 interactive 标记（case_ingest 写入）；
+// DA0001 为历史演示数据兜底。新案例接入 = case_ingest 落数据，前端零改动。
+const isInteractiveAdm = (p, a) => !!(a.interactive || (p.code === "DA0001" && a.idx === 1));
 function clearTimers(){ S.timers.forEach(t => clearInterval(t) || clearTimeout(t)); S.timers = []; }
 function later(fn, ms){ const t = setTimeout(fn, ms); S.timers.push(t); }
 function fmtTs(ts){ if(!ts || ts.length !== 8) return ts || "—"; return `${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}`; }
@@ -66,10 +75,20 @@ async function loadData(){
     fetch("data/dialogue.json").then(r => r.json()),
     fetch("data/fieldmap.json").then(r => r.json()),
   ]);
-  S.patients = p; S.dialogue = d; S.fieldmap = f;
+  S.patients = p; S.dialogue = d; S.dialogueDefault = d; S.fieldmap = f;
+  // 预加载按患者对话文件（真实案例的录音转写对话）；单个失败静默降级为默认对话
+  const files = [...new Set(p.flatMap(x => x.admissions.map(a => a.dialogue).filter(Boolean)))];
+  await Promise.all(files.map(fn =>
+    fetch("data/" + fn).then(r => r.ok ? r.json() : null)
+      .then(dd => { if (dd) S.dialogueByFile[fn] = dd; }).catch(() => {})));
 }
 const getPatient = code => S.patients.find(p => p.code === code);
 const getAdm = (code, idx) => { const p = getPatient(code); return p && p.admissions[idx - 1]; };
+const admOfKey = key => getAdm(keyCode(key), keyIdx(key));
+/* 当前流程对话：住院次配置了 dialogue 文件（真实案例）→ 用之；否则默认演示对话 */
+function dialogueFor(adm){
+  return (adm && adm.dialogue && S.dialogueByFile[adm.dialogue]) || S.dialogueDefault;
+}
 
 /* ---------------- 路由 ---------------- */
 function route(){
@@ -99,16 +118,52 @@ window.addEventListener("hashchange", route);
 function viewWorkbench(){
   const totalDocs = S.patients.reduce((n, p) => n + p.admissions.reduce((m, a) => m + a.doc_count, 0), 0);
   const totalAdm = S.patients.reduce((n, p) => n + p.admissions.length, 0);
-  let flowSaved = null;
-  try { flowSaved = JSON.parse(localStorage.getItem("mra_flow_DA0001_1")); } catch (e) {}
-  const editsDone = flowSaved ? Object.keys(flowSaved.edits || {}).length : 0;
-  const flowDone = flowSaved && flowSaved.step === 4;
-  const task1Title = flowDone ? "患者A · 入院记录（急性阑尾炎）— 已归档（演示）"
-    : editsDone > 0 ? `患者A · 入院记录（急性阑尾炎）— 核对中，已修改 ${editsDone} 处`
-    : "患者A · 入院记录（急性阑尾炎）— AI 草稿已生成，待四色确认";
-  const task1Btn = flowDone ? "查看归档结果 →" : "继续核对 →";
+  // 交互任务（数据驱动）：所有带 interactive 标记的住院次（患者A 演示 + 患者F 真实录音案例 + 后续接入案例）
+  const tasks = [];
+  S.patients.forEach(p => p.admissions.forEach((a, i) => {
+    if (isInteractiveAdm(p, a)) tasks.push({ p, a, key: flowKey(p.code, a.idx ?? (i + 1)) });
+  }));
+  const taskCards = tasks.map(t => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("mra_flow_" + t.key)); } catch (e) {}
+    const editsDone = saved ? Object.keys(saved.edits || {}).length : 0;
+    const flowDone = saved && saved.step === 4;
+    const step = saved ? (saved.step || 1) : 1;
+    const real = !!t.a.real_recording;
+    const name = `${t.p.display} · 入院记录（${(t.a.disease || "住院").replace(/（.*）$/, "")}）`;
+    // 诚实状态（GUI 实测 D2 修复）：未开始的流程不再显示"草稿已生成"
+    const title = flowDone ? `${name} — 已归档`
+      : editsDone > 0 ? `${name} — 核对中，已修改 ${editsDone} 处`
+      : step >= 2 ? `${name} — AI 草稿已生成，待四色确认`
+      : real ? `${name} — 真实录音已转写，待进入问诊流程`
+      : `${name} — 待开始：问诊录音 → AI 生成`;
+    const dlg = dialogueFor(t.a);
+    const sub = real
+      ? `法定时限：入院 24h 内完成 · 首例真实录音案例 · ${dlg.length} 轮问诊对话（本地转写 · 已脱敏）${editsDone > 0 && !flowDone ? " · 修改已自动留痕" : ""}`
+      : `法定时限：入院 24h 内完成 · 剩余 13h · ${dlg.length} 轮问诊对话已转写${editsDone > 0 && !flowDone ? " · 修改已自动留痕" : ""}`;
+    return `
+      <div class="card task-row ${real ? "" : "t-warn"}">
+        <div class="t-icon">${real ? "🎙" : "🖊"}</div>
+        <div class="t-main">
+          <div class="t-title">${esc(title)}${real ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">真实录音</span>' : ""}</div>
+          <div class="t-sub">${esc(sub)}</div>
+        </div>
+        <button class="btn primary" onclick="location.hash='#/adm/${t.p.code}/${t.a.idx ?? 1}'">${flowDone ? "查看归档结果 →" : step >= 2 ? "继续核对 →" : (real ? "进入问诊流程 →" : "开始问诊 →")}</button>
+      </div>
+      <div class="card task-row">
+        <div class="t-icon" style="background:var(--primary-soft)">📝</div>
+        <div class="t-main">
+          <div class="t-title">${t.p.display} · 首次病程记录 — AI 生成已开放</div>
+          <div class="t-sub">法定时限：入院 8h 内 · 病例特点 / 诊断依据 / 鉴别诊断（知识辅助）/ 诊疗计划</div>
+        </div>
+        <button class="btn primary" onclick="startFlowDoc('首次病程记录','${t.p.code}',${t.a.idx ?? 1})">生成草稿 →</button>
+      </div>`;
+  }).join("");
+  const pendingN = tasks.filter(t => {
+    try { const s = JSON.parse(localStorage.getItem("mra_flow_" + t.key)); return s && s.step !== 4; } catch (e) { return true; }
+  }).length;
   $app.innerHTML = `
-    <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者已脱敏（患者A / 患者B），数据源自院方提供的真实住院病历（金标准）；"录音转写"为按真实入院记录重构的模拟对话，"AI 生成"内容取自金标准文书以演示确认流程。正式环境中草稿由多智能体实时生成。</div>
+    <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者均已脱敏。患者A/B 数据源自院方真实住院病历（金标准文书），对话为按真实入院记录重构的模拟问诊；<b>患者F 为首例真实录音案例</b>——录音经本地转写、脱敏后接入，全流程真实运行。草稿由多智能体实时生成，医生确认后方可归档。</div>
     <div class="page-head">
       <div class="page-title">工作台<small>${S.user ? esc(S.user.name) + (S.user.department ? " · " + esc(S.user.department) : "") : "王医生"} · 演示数据集</small></div>
       <div style="display:flex;gap:8px"><button class="btn" onclick="startTour(true)">▶ 新手引导</button><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
@@ -116,22 +171,7 @@ function viewWorkbench(){
     <div id="rv-brief"></div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default">今日书写任务</div>
     <div class="task-list" id="tour-tasks">
-      <div class="card task-row t-warn">
-        <div class="t-icon">🖊</div>
-        <div class="t-main">
-          <div class="t-title">${task1Title}</div>
-          <div class="t-sub">法定时限：入院 24h 内完成 · 剩余 13h · 27 轮问诊对话已转写${editsDone > 0 && !flowDone ? " · 修改已自动留痕" : ""}</div>
-        </div>
-        <button class="btn primary" onclick="location.hash='#/adm/DA0001/1'">${task1Btn}</button>
-      </div>
-      <div class="card task-row">
-        <div class="t-icon" style="background:var(--primary-soft)">📝</div>
-        <div class="t-main">
-          <div class="t-title">患者A · 首次病程记录 — AI 生成已开放</div>
-          <div class="t-sub">法定时限：入院 8h 内 · 病例特点 / 诊断依据 / 鉴别诊断（知识辅助）/ 诊疗计划</div>
-        </div>
-        <button class="btn primary" onclick="startFlowDoc('首次病程记录')">生成草稿 →</button>
-      </div>
+      ${taskCards}
       <div class="card task-row t-dim">
         <div class="t-icon">🩺</div>
         <div class="t-main">
@@ -150,18 +190,20 @@ function viewWorkbench(){
     </div>
     <div class="stat-row" id="tour-stats">
       <div class="card stat"><span class="num">${S.patients.length}</span><span class="lab">在院患者（脱敏）</span></div>
-      <div class="card stat b"><span class="num">${totalAdm}</span><span class="lab">住院记录</span><span class="sub">2023-11 ~ 2026-09</span></div>
+      <div class="card stat b"><span class="num">${totalAdm}</span><span class="lab">住院记录</span><span class="sub">2023-11 ~ 2026-10</span></div>
       <div class="card stat g"><span class="num">${totalDocs}</span><span class="lab">累计病历文书</span><span class="sub">入院 / 病程 / 手术 / 出院 等</span></div>
-      <div class="card stat y"><span class="num">1</span><span class="lab">待确认草稿</span><span class="sub">患者A · 入院记录</span></div>
+      <div class="card stat y"><span class="num">${pendingN}</span><span class="lab">进行中书写任务</span><span class="sub">入院记录 / 首次病程</span></div>
     </div>
     <div class="sec-head" style="padding-left:2px;font-size:17px;border:none;background:none;cursor:default;margin-bottom:12px">我的患者</div>
     <div class="pt-grid" id="tour-patients">
-      ${S.patients.map((p, pi) => `
+      ${S.patients.map((p, pi) => {
+        const ia = p.admissions.find(a => isInteractiveAdm(p, a));
+        return `
         <div class="card pt-card" onclick="location.hash='#/patient/${p.code}'">
           <div class="pt-top">
             <div class="pt-avatar">${p.display.slice(-1)}</div>
             <div>
-              <div class="pt-name">${p.display} <span class="tag" style="background:var(--paper-2);color:var(--ink-3)">${p.code}</span></div>
+              <div class="pt-name">${p.display} <span class="tag" style="background:var(--paper-2);color:var(--ink-3)">${p.code}</span>${ia && ia.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">🎙 真实录音</span>' : ""}</div>
               <div class="pt-meta">${patientMeta(p)}</div>
             </div>
           </div>
@@ -174,8 +216,8 @@ function viewWorkbench(){
                 <span class="go">进入 →</span>
               </div>`).join("")}
           </div>
-          ${p.code === "DA0001" ? `<div style="margin-top:14px"><button class="btn primary big" onclick="event.stopPropagation();location.hash='#/adm/DA0001/1'">▶ 开始入院问诊（演示全流程）</button></div>` : `<div style="margin-top:14px;font-size:12px;color:var(--ink-3)">全景视图 · 点击住院记录查看文书流（交互流程演示配置于患者A）</div>`}
-        </div>`).join("")}
+          ${ia ? `<div style="margin-top:14px"><button class="btn primary big" onclick="event.stopPropagation();location.hash='#/adm/${p.code}/${ia.idx ?? 1}'">▶ ${ia.real_recording ? "进入真实案例问诊流程" : "开始入院问诊（演示全流程）"}</button></div>` : `<div style="margin-top:14px;font-size:12px;color:var(--ink-3)">全景视图 · 点击住院记录查看文书流</div>`}
+        </div>`; }).join("")}
     </div>`;
   loadReviewBrief();
 }
@@ -200,6 +242,7 @@ function loadReviewBrief(){
   }, 60);
 }
 function patientMeta(p){
+  if (p.profile) return esc(p.profile);   // case_ingest 写入（真实案例：性别 · 年龄 · 科室）
   const sexes = { DA0001: "男 · 23岁 · 普外科", DA0002: "女 · 58岁 · 多科室" };
   return sexes[p.code] || "";
 }
@@ -239,7 +282,7 @@ function admissionTimeline(p, a, i){
           <span class="tl-disease">第 ${i + 1} 次 · ${esc(a.disease || "住院记录")}</span>
           <span class="tag" style="background:var(--paper-2);color:var(--ink-2)">VISIT_ID ${a.visit_id ?? "—"}</span>
           <button class="btn" style="margin-left:auto" onclick="event.stopPropagation();showAISummary('${p.code}',${i + 1})">⚡ AI 病例总结</button>
-          ${p.code === "DA0001" ? `<button class="btn primary" onclick="location.hash='#/adm/${p.code}/${i + 1}'">进入住院工作区 →</button>`
+          ${isInteractiveAdm(p, a) ? `<button class="btn primary" onclick="location.hash='#/adm/${p.code}/${i + 1}'">进入住院工作区 →</button>`
             : `<span style="font-size:11.5px;color:var(--ink-3)">只读视图 · 点击文书查看</span>`}
         </div>
         <div class="doc-chips">
@@ -316,19 +359,23 @@ function viewAdmission(code, idx){
   const p = getPatient(code), adm = getAdm(code, idx);
   if (!adm) return viewWorkbench();
   const key = flowKey(code, idx), st = flowState(key);
-  const editable = p.code === "DA0001";
+  const editable = isInteractiveAdm(p, adm);
+  if (editable){
+    S.curKey = key;                 // 全局回调（确认/归档/导出/修改留痕）以当前流程为准
+    S.dialogue = dialogueFor(adm);  // 按患者对话（真实案例=录音转写；缺省=演示对话）
+  }
   const steps = ["问诊录音", "AI 生成草稿", "四色确认", "归档"];
   const stepBar = editable ? `
     <div class="ws-steps">
       ${steps.map((s, i) => `<div class="ws-step ${st.step === i + 1 ? "cur" : st.step > i + 1 ? "done" : ""}"><span class="n">${st.step > i + 1 ? "✓" : i + 1}</span>${s}</div>`).join("")}
     </div>` : `
-    <div class="notice">本住院为<b>只读全景视图</b>（演示交互流程配置于患者A 的住院记录）。您可查看文书流与 HIS 汇总，点击文书查看字段内容。</div>`;
+    <div class="notice">本住院为<b>只读全景视图</b>（交互流程见带任务标记的住院记录）。您可查看文书流与 HIS 汇总，点击文书查看字段内容。</div>`;
   $app.innerHTML = `
     <div class="card ws-head">
       <div style="display:flex;align-items:center;gap:14px">
         <button class="btn ghost" onclick="location.hash='#/patient/${code}'">←</button>
         <div>
-          <div class="page-title" style="font-size:22px">${p.display} · 第 ${idx} 次住院<small>${esc(adm.disease || "")}</small></div>
+          <div class="page-title" style="font-size:22px">${p.display} · 第 ${idx} 次住院<small>${esc(adm.disease || "")}</small>${adm.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green);vertical-align:middle">🎙 首例真实录音案例</span>' : ""}</div>
           <div style="font-size:12px;color:var(--ink-3);margin-top:4px">${fmtTs(adm.admit_ts)} 入院 · ${adm.doc_count} 份文书 · 病案号 ${code}</div>
         </div>
       </div>
@@ -394,9 +441,13 @@ function renderStepRecord(body, key, adm){
         <button class="btn big primary" id="rec-cta" style="margin-top:10px;width:100%">●&nbsp; 开始录音</button>
         <div class="dialect-note">${real
           ? `🎙 <b>真实引擎已就绪</b>：${esc(S.asr.engine)} · 麦克风采集 16kHz PCM，结束后整段上传转写${esc(S.asr.note ? "（" + S.asr.note + "）" : "")}`
+          : adm.real_recording
+          ? `🎙 <b>真实录音案例</b>：本例对话来自<b>院方采集的真实问诊录音</b>（本地 Whisper 转写 + 医疗热词修正 + LLM 角色标注，已脱敏）。点击「开始录音」回放转写过程；正式环境为床旁实时录音转写。`
           : `🎙 <b>方言识别</b>：系统实时将<b>山东方言</b>转写为普通话文本，自动区分<b>医生 / 患者</b>角色；药品名、检查名已加入医疗热词。演示环境为按真实入院记录重构的模拟对话。`}</div>
         <div style="font-size:11px;color:var(--ink-3);margin-top:8px;line-height:1.7">${real
           ? `真实模式：点击「开始录音」将请求<b>麦克风权限</b>并真实采集音频，结束后由服务端引擎转写（角色分离能力以引擎为准，无角色信息时可在过程稿中人工标注）。`
+          : adm.real_recording
+          ? `回放模式：播放的是真实录音的转写稿（方言口音已由 ASR 转为文字，错听词经热词表修正，可在过程稿中人工再修正）。`
           : `演示模式：无需真实说话，点击「开始录音」后将自动播放一段模拟问诊，用以展示"对话 → 病历字段"的完整链路。配置 ASR_* 引擎密钥后本页自动切换为真实录音。`}</div>
       </div>
       <div class="card transcript" id="transcript">
@@ -427,7 +478,7 @@ function renderStepRecord(body, key, adm){
         rec = true; orb.classList.add("rec"); wave.classList.add("on");
         stateEl.textContent = "正在录音 · 方言实时转写中";
         cta.innerHTML = "■&nbsp; 结束问诊"; cta.classList.remove("primary");
-        const t = setInterval(() => { sec++; timeEl.textContent = `00:${String(sec).padStart(2, "0")}`; }, 1000);
+        const t = setInterval(() => { sec++; timeEl.textContent = `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`; }, 1000);
         S.timers.push(t);
         window._startDemoReplay && window._startDemoReplay();
       }
@@ -511,7 +562,7 @@ async function transcribeReal(tp, key, wavB64, durSec, onFail){
   try{
     const r = await fetch("api/asr/transcribe", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio_base64: wavB64, filename: `问诊_DA0001_${Date.now()}`, duration_sec: durSec }) });
+      body: JSON.stringify({ audio_base64: wavB64, filename: `问诊_${keyCode(key)}_${Date.now()}`, duration_sec: durSec }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `AI 服务返回 ${r.status}`);
     st.transcriptTurns = (d.segments || []).map(s => ({
@@ -536,8 +587,20 @@ function startStreaming(tp, key){
   const st = flowState(key);
   tp.innerHTML = "";
   let i = 0;
+  // 长对话（真实案例 50 轮）自动提速回放，避免演示等待过久（GUI 实测反馈）
+  const fast = S.dialogue.length > 30;
+  const cps = fast ? 10 : 24, gap = fast ? 220 : 500;
   const next = () => {
-    if (i >= S.dialogue.length) return;
+    if (i >= S.dialogue.length){
+      // 回放播完自动收尾（GUI 实测：此前需手动点"结束问诊"，长对话下用户会一直等待）。
+      // 仅演示模式自动触发；真实录音模式的降级回放仍由医生手动结束（避免误传空音频）。
+      if (!(S.asr && S.asr.real))
+        later(() => {
+          const cta = document.getElementById("rec-cta");
+          if (cta && !cta.disabled && cta.innerHTML.includes("结束问诊")) cta.click();
+        }, 1200);
+      return;
+    }
     const turn = S.dialogue[i++];
     st.revealed = i;
     const line = document.createElement("div");
@@ -555,9 +618,9 @@ function startStreaming(tp, key){
       c += 2; txtEl.textContent = text.slice(0, c);
       tp.scrollTop = tp.scrollHeight;
       if (c >= text.length){ clearInterval(typeT); caret.remove(); }
-    }, 24);
+    }, cps);
     S.timers.push(typeT);
-    S.timers.push(setTimeout(next, text.length * 24 + 500));
+    S.timers.push(setTimeout(next, text.length * cps + gap));
   };
   next();
 }
@@ -571,20 +634,21 @@ function renderTranscriptResult(tp, key){
   const turns = transcriptTurns(key);
   const meta = st.transcriptMeta;
   const mdText = transcriptText(key);
+  const adm = admOfKey(key) || {};
   tp.innerHTML = turns.map(t => `
     <div class="ts-line ${t.role === "医生" ? "doctor" : (t.role === "患者" ? "patient" : "")}" style="animation:none;opacity:1;transform:none">
       <div class="who">${esc(t.role)}</div><div class="ts-bubble">${esc(t.text)}</div>
     </div>`).join("") + `
     <div class="md-doc">
-      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
-      <div class="md-body">问诊记录_DA0001_202609021040.md&nbsp;&nbsp;·&nbsp;&nbsp;${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : " · 医生/患者角色已分离"} · 全文可溯源</div>
+      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${adm.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">🎙 真实录音转写</span>' : ''}${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
+      <div class="md-body">问诊记录_${keyCode(key)}_${adm.admit_ts || ""}.md&nbsp;&nbsp;·&nbsp;&nbsp;${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : adm.real_recording ? " · 本地转写 · LLM 角色标注" : " · 医生/患者角色已分离"} · 全文可溯源</div>
       ${(meta && (meta.warnings || []).length) ? `<div style="font-size:11px;color:var(--yellow);margin-top:6px">⚠ ${esc(meta.warnings.join("；"))}</div>` : ""}
       <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn primary big" id="gen-cta">⚙ 生成入院记录草稿（多智能体）</button>
         <button class="btn big" id="edit-ts">✎ 修正过程稿</button>
       </div>
     </div>`;
-  document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; persistFlow(key); viewAdmission("DA0001", 1); };
+  document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; persistFlow(key); viewAdmissionKey(key); };
   document.getElementById("edit-ts").onclick = () => editTranscript(tp, key);
   const mdEl = tp.querySelector(".md-doc");
   if (mdEl) mdEl.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -650,7 +714,7 @@ function renderStepGenerate(body, key, adm){
   const meta = DOC_META[curDoc];
   body.innerHTML = `
     <div class="doc-tabs">
-      ${FLOW_DOCS.map(d => `<button class="doc-tab ${d === curDoc ? "on" : ""}" onclick="setFlowDoc('${d}')">${DOC_META[d].icon} ${d}<small>${DOC_META[d].sub}</small></button>`).join("")}
+      ${FLOW_DOCS.map(d => `<button class="doc-tab ${d === curDoc ? "on" : ""}" onclick="setFlowDoc('${d}','${keyCode(key)}',${keyIdx(key)})">${DOC_META[d].icon} ${d}<small>${DOC_META[d].sub}</small></button>`).join("")}
     </div>
     <div class="notice">⚡ <b>真实多智能体生成 · ${esc(curDoc)}</b>&nbsp;六个智能体正按流水线真实运行（DeepSeek 驱动，每个字段带来源与依据）；约 15~40 秒。${curDoc === "首次病程记录" ? "鉴别诊断/诊疗计划为知识辅助（灰源），须医生核定。" : "无录音模式下绿字段有限——这正是录音补采的意义。"}</div>
     <div class="gen-progress"><i id="gen-bar"></i></div>
@@ -667,7 +731,7 @@ function renderStepGenerate(body, key, adm){
   // 流式消费 NDJSON（真实六智能体事件；服务端错误如实展示，绝不本地伪造智能体动画）
   // P2-E：转写过程稿随请求上传（此前演示链路未传——"对话→病历字段"实为断链，已修复）
   fetch("api/generate-draft", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: "DA0001", admission: 1, doc: curDoc, transcript: transcriptText(key) }) })
+    body: JSON.stringify({ code: keyCode(key), admission: keyIdx(key), doc: curDoc, transcript: transcriptText(key) }) })
     .then(resp => {
       if (!resp.ok){
         return resp.json().catch(() => ({})).then(d => {
@@ -695,17 +759,19 @@ function renderStepGenerate(body, key, adm){
       if (done) done.innerHTML = `<div class="notice">⚠ ${esc(msg)}。线上部署（已配置 DeepSeek）：http://60.205.204.162/mra/</div>`;
     });
 }
-function setFlowDoc(doc){
-  const st = flowState(flowKey("DA0001", 1));
-  st.currentDoc = doc; persistFlow(st.key || flowKey("DA0001", 1));
-  viewAdmission("DA0001", 1);
+function setFlowDoc(doc, code, idx){
+  const key = code ? flowKey(code, idx) : (S.curKey || flowKey("DA0001", 1));
+  const st = flowState(key);
+  st.currentDoc = doc; persistFlow(key);
+  viewAdmissionKey(key);
 }
-function startFlowDoc(doc){
-  const key = flowKey("DA0001", 1), st = flowState(key);
+function startFlowDoc(doc, code, idx){
+  const key = code ? flowKey(code, idx) : (S.curKey || flowKey("DA0001", 1));
+  const st = flowState(key);
   st.currentDoc = doc;
   st.step = 2;  // 从工作台直达生成步骤（已有草稿会直接显示结果页）
   persistFlow(key);
-  location.hash = "#/adm/DA0001/1";
+  location.hash = `#/adm/${keyCode(key)}/${keyIdx(key)}`;
 }
 function handleAgentEvent(ev, key){
   const st = flowState(key);
@@ -772,13 +838,13 @@ function renderAgentResult(body, key, result, doc){
         <button class="btn big" id="regen">↻ 重新生成</button>
       </div>
     </div>`;
-  document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmission("DA0001", 1); };
+  document.getElementById("to-confirm").onclick = () => { flowState(key).step = 3; persistFlow(key); viewAdmissionKey(key); };
   document.getElementById("regen").onclick = () => {
     const st2 = flowState(key);
     if (st2.agentResults) delete st2.agentResults[docName];
     if (docName === "入院记录") st2.agentResult = null;
     persistFlow(key);
-    renderStepGenerate(document.getElementById("step-body"), key, getAdm("DA0001", 1));
+    renderStepGenerate(document.getElementById("step-body"), key, admOfKey(key));
   };
 }
 
@@ -805,7 +871,7 @@ function draftToDoc(result, admRec, docName){
 }
 function renderStepConfirm(body, key, adm){
   const st = flowState(key);
-  const admRec = getPatient("DA0001").admissions[0];
+  const admRec = adm || admOfKey(key);
   const curDoc = st.currentDoc || "入院记录";
   const res = getAgentResult(st, curDoc);
   const doc = res ? draftToDoc(res, admRec, curDoc)
@@ -901,10 +967,10 @@ function renderStepConfirm(body, key, adm){
 async function submitArchive(key, doc, doctor, real){
   const st = flowState(key);
   if (real){
-    const admRec = getPatient("DA0001").admissions[0];
+    const admRec = admOfKey(key) || {};
     const agentRes = getAgentResult(st, doc.type);
     const payload = {
-      code: "DA0001", admission: 1, doc: doc.type, disease: (admRec.disease || "").replace(/（.*）$/, ""),
+      code: keyCode(key), admission: keyIdx(key), doc: doc.type, disease: (admRec.disease || "").replace(/（.*）$/, ""),
       fields: doc.fields,
       qc: (agentRes && agentRes.stats && agentRes.stats.qc) || {},
       edits: st.editLog || [],
@@ -917,7 +983,7 @@ async function submitArchive(key, doc, doctor, real){
       if (r.ok && d.ok){
         const st2 = flowState(key);
         st2.step = 4; st2.confirmedBy = doctor; st2.archive = d; persistFlow(key);
-        viewAdmission("DA0001", 1);
+        viewAdmissionKey(key);
         return;
       }
       alert("归档服务返回错误：" + (d.error || "未知") + "（本次降级为演示归档）");
@@ -925,10 +991,10 @@ async function submitArchive(key, doc, doctor, real){
       alert("归档服务不可达（" + e.message + "），本次降级为演示归档");
     }
   }
-  const st2 = flowState(key); st2.step = 4; st2.confirmedBy = doctor; persistFlow(key); viewAdmission("DA0001", 1);
+  const st2 = flowState(key); st2.step = 4; st2.confirmedBy = doctor; persistFlow(key); viewAdmissionKey(key);
 }
 function setConfirmFilter(k){
-  const st = flowState("DA0001_1"); st.filter = k; persistFlow("DA0001_1");
+  const st = flowState(S.curKey); st.filter = k; persistFlow(S.curKey);
   const ctx = window._confirmCtx; if (ctx) renderStepConfirm(ctx.body, ctx.key, ctx.adm);
 }
 function toggleAllSections(open){
@@ -969,16 +1035,20 @@ function fieldRow(f, st, conflictLabels){
 function toggleSrc(fid, turnIdxs){
   const box = document.getElementById(`src-${fid}`);
   if (box.innerHTML){ box.innerHTML = ""; return; }
-  const idxs = JSON.parse(turnIdxs);
+  // 内联 onclick 传入的是 JS 数组字面量；兼容旧存档/字符串形态（GUI 实测 D1 修复）
+  let idxs;
+  try { idxs = Array.isArray(turnIdxs) ? turnIdxs : JSON.parse(turnIdxs); } catch (e) { return; }
+  if (!Array.isArray(idxs)) return;
   box.innerHTML = `<div class="src-pop">${idxs.map(i => {
     const t = S.dialogue[i];
-    return `<div class="who">转写稿 · ${t.role}（录音 00:${String(3 + i * 7).padStart(2, "0")}）</div>${esc(t.text)}`;
+    if (!t) return "";
+    return `<div class="who">转写稿 · ${esc(t.role)}（第 ${i + 1} 轮）</div>${esc(t.text)}`;
   }).join('<div style="height:6px"></div>')}</div>`;
 }
 function toggleEditLog(){
   const panel = document.getElementById("editlog-panel");
   if (panel.innerHTML){ panel.innerHTML = ""; return; }
-  const st = flowState("DA0001_1");
+  const st = flowState(S.curKey);
   panel.innerHTML = `<div class="card" style="padding:14px 18px;margin-top:14px">
     <div class="md-title">修改留痕（${st.editLog.length} 条 · 随归档包存档，用于审计与模型反馈）</div>
     ${st.editLog.map((e, i) => `
@@ -993,13 +1063,16 @@ function toggleEditLog(){
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 function exportEditLog(){
-  const st = flowState("DA0001_1");
-  const payload = { document: "入院记录_DA0001_20260902", confirmedBy: "王医生（住院医师）",
+  const st = flowState(S.curKey);
+  const adm = admOfKey(S.curKey) || {};
+  const docName = st.currentDoc || "入院记录";
+  const payload = { document: `${docName}_${keyCode(S.curKey)}_${adm.admit_ts || ""}`,
+    confirmedBy: (st.confirmedBy || "王医生") + "（住院医师）",
     exportedAt: new Date().toISOString(), editLog: st.editLog };
   const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "修改留痕_DA0001_入院记录.json";
+  a.download = `修改留痕_${keyCode(S.curKey)}_${docName}.json`;
   a.click(); URL.revokeObjectURL(a.href);
 }
 function editField(fid){
@@ -1020,14 +1093,14 @@ function saveEdit(fid){
   const after = ta.value;
   edits[fid] = after;
   // F8 反馈闭环：修改留痕（改前/改后/字段/时间），归档时可下载
-  const st = flowState("DA0001_1");
+  const st = flowState(S.curKey);
   st.editLog.push({
     field: doc.fields[+fid].label || "（基本项）",
     before: String(before), after: String(after),
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-    doctor: "王医生",
+    doctor: (S.user && S.user.name) || "王医生",
   });
-  persistFlow("DA0001_1");
+  persistFlow(S.curKey);
   const vv = document.getElementById(`fv-${fid}`);
   if (vv) vv.textContent = after;
   document.getElementById(`edit-zone-${fid}`).innerHTML = "";
@@ -1040,7 +1113,7 @@ function saveEdit(fid){
 
 /* ---------------- Step4 归档 ---------------- */
 function renderStepArchive(body, key, adm){
-  const admRec = getPatient("DA0001").admissions[0];
+  const admRec = adm || admOfKey(key);
   const curDoc = flowState(key).currentDoc || "入院记录";
   const doc = window._draftDoc
     || (getAgentResult(flowState(key), curDoc) ? draftToDoc(getAgentResult(flowState(key), curDoc), admRec, curDoc) : null)
@@ -1060,7 +1133,7 @@ function renderStepArchive(body, key, adm){
         <div style="margin-top:14px;display:flex;gap:10px">
           <button class="btn" onclick="downloadXML()">⬇ 下载归档包（模拟）</button>
           <button class="btn" onclick="exportEditLog()">⬇ 下载修改留痕（${st.editLog.length} 条）</button>
-          <button class="btn ghost" onclick="flowState('${key}').step=3;viewAdmission('DA0001',1)">← 返回修改</button>
+          <button class="btn ghost" onclick="flowState('${key}').step=3;viewAdmissionKey('${key}')">← 返回修改</button>
         </div>
       </div>
       <div class="card arch-receipt">
@@ -1090,7 +1163,7 @@ function renderStepArchive(body, key, adm){
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button>
           <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
-          <button class="btn big" onclick="location.hash='#/patient/DA0001'">在患者全景中查看</button>
+          <button class="btn big" onclick="location.hash='#/patient/${keyCode(key)}'">在患者全景中查看</button>
         </div>`}
       </div>
     </div>`;
@@ -1119,8 +1192,9 @@ function downloadXML(){
   const xml = buildXML(window._draftDoc);
   const blob = new Blob([xml], { type: "application/xml" });
   const a = document.createElement("a");
+  const adm = admOfKey(S.curKey) || {};
   a.href = URL.createObjectURL(blob);
-  a.download = "入院记录_DA0001_20260902_草稿.xml";
+  a.download = `${(window._draftDoc && window._draftDoc.type) || "入院记录"}_${keyCode(S.curKey)}_${adm.admit_ts || ""}_草稿.xml`;
   a.click(); URL.revokeObjectURL(a.href);
 }
 function exportDraftXML(){ downloadXML(); }
@@ -1130,7 +1204,8 @@ function exportDraftXML(){ downloadXML(); }
    原生打印——另存为 PDF 零依赖、零新增库；正式归档仍走 XML 回填包。 */
 function buildPrintHTML(doc, opts){
   opts = opts || {};
-  const adm = getPatient("DA0001").admissions[0];
+  const adm = admOfKey(S.curKey) || {};
+  const pat = getPatient(keyCode(S.curKey)) || { display: keyCode(S.curKey), code: keyCode(S.curKey) };
   const sections = {};
   doc.fields.filter(f => f.label && String(f.value || "").trim()).forEach(f => {
     const sec = sectionOf(f);
@@ -1141,7 +1216,7 @@ function buildPrintHTML(doc, opts){
     <table>${sections[s].map(f => `
       <tr><td class="pr-lb">${esc(f.label)}</td><td>${esc(String(f.value).replace(/\r?\n/g, "；"))}</td></tr>`).join("")}</table>`).join("")
     || "<p style='font-size:12px;color:#666'>（无可打印字段）</p>";
-  const metaBits = ["患者：患者A（DA0001）", "病种：" + (adm.disease || "—").replace(/（.*）$/, "")];
+  const metaBits = [`患者：${pat.display}（${pat.code}）`, "病种：" + (adm.disease || "—").replace(/（.*）$/, "")];
   if (opts.archiveNo) metaBits.push("归档编号：" + opts.archiveNo);
   if (opts.confirmedBy) metaBits.push("确认医生：" + opts.confirmedBy);
   metaBits.push("打印时间：" + new Date().toLocaleString("zh-CN", { hour12: false }));
@@ -1155,7 +1230,7 @@ function buildPrintHTML(doc, opts){
 function printRecord(){
   const doc = window._draftDoc;
   if (!doc) return alert("暂无可打印的文书——请先完成生成或进入归档页");
-  const st = flowState("DA0001_1");
+  const st = flowState(S.curKey);
   let root = document.getElementById("print-root");
   if (!root){ root = document.createElement("div"); root.id = "print-root"; document.body.appendChild(root); }
   root.innerHTML = buildPrintHTML(doc, { archiveNo: st.archive && st.archive.record_no, confirmedBy: st.confirmedBy });

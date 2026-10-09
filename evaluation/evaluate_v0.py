@@ -114,8 +114,12 @@ def discover_docs(base_dir, workdir, types=("入院记录", "出院记录", "首
     return results
 
 def load_his_views(pdir):
+    # 8 表全量加载（患者F 首例真实案例接入时补齐）：aggregator.from_his_views 本就消费
+    # 医嘱/检验结果（异常检验→辅助检查、医嘱→诊疗计划素材），此前只装 5 表等于白白丢弃
+    # 半数量化数据；缺失的表按空列表降级，兼容老数据目录。
     views = {}
-    for name in ("检验申请主表", "检查申请主表", "检查申请项目", "检查结果", "生命体征"):
+    for name in ("检验申请主表", "检验申请项目", "检验结果", "检查申请主表", "检查申请项目",
+                 "检查结果", "生命体征", "医嘱"):
         p = os.path.join(pdir, name + ".xls")
         views[name] = list(sheet_rows(p)) if os.path.exists(p) else []
     return views

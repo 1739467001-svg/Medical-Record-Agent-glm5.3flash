@@ -23,9 +23,10 @@ _DIALOGUE = None
 
 # 各文书类型的住院窗口（天）：首程/入院记录以入院日为中心；出院记录覆盖整个住院过程
 STAY_WINDOW_DAYS = {"入院记录": 3, "首次病程记录": 3, "出院记录": 14}
-# HIS 视图中的日期列名（按优先级；实测列名见 检查申请主表/检验申请主表/生命体征）
+# HIS 视图中的日期列名（按优先级；实测列名见 检查申请主表/检验申请主表/生命体征/医嘱/检验结果）
 DATE_COLS = ("EXAM_DATE_TIME", "REQ_DATE_TIME", "EXECUTE_DATE", "REQUESTED_DATE_TIME",
-             "RESULTS_RPT_DATE_TIME", "REPORT_DATE_TIME", "TIME_POINT", "APPLY_DATE", "ORDER_DATE")
+             "RESULTS_RPT_DATE_TIME", "REPORT_DATE_TIME", "TIME_POINT", "APPLY_DATE", "ORDER_DATE",
+             "START_DATE_TIME", "RESULT_DATE_TIME", "ENTER_DATE_TIME", "RECORDING_DATE")
 
 def _dialogue():
     global _DIALOGUE
