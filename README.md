@@ -63,14 +63,16 @@ python3 tools/make_rehearsal_audio.py                       # ① 合成双声�
 ASR_LOCAL_MODEL=small python3 tools/asr_ingest.py 病历资料/彩排录音 --transcribe --engine local-whisper  # ② 本地转写（数据不出机）
 python3 evaluation/rehearsal_mode_c.py                      # ③ 模式A/C 对照评测 + 字错率 → docs/录音链路彩排报告.md
 
-# 真实案例接入传送带（首例患者F 已跑通；第 2、3 个案例同此五步，详见 docs/真实案例接入报告_患者F.md 第七节）
+# 真实案例接入传送带（首例患者F 已跑通；第 2、3 个案例同此六步，详见 docs/真实案例接入报告_患者F.md 第七节）
 # ① 案例目录（git 忽略）：病历资料/住院/<姓名>/ 放 8 张 HIS 表 xls；录音放 录音/ 子目录（mp3 先转 16k 单声道 WAV）
 # ② 患者代号映射.json 增加 "<姓名>": "患者X"（不入 Git）
 # ③ 落位校验 + 本地转写（建议 ASR_LOCAL_PROMPT 带上申请单诊断，实测最优）
 ASR_LOCAL_MODEL=small python3 tools/asr_ingest.py "病历资料/住院/<姓名>/录音" --transcribe --engine local-whisper
 # ④ 接入（自动探测入院/出院/科室/诊断；LLM 角色标注；红线扫描 0 命中才落盘 demo/data）
 python3 tools/case_ingest.py "病历资料/住院/<姓名>" --code DA00NN --dry-run   # 先核对，再去掉 --dry-run
-# ⑤ 平台验证：工作台任务卡 → 录音回放（真实转写）→ 生成 → 四色确认 → 归档
+# ⑤ Markdown 问诊过程稿（时间戳×角色×关联字段表；挂载 admission.transcript_md，前端可查看）
+python3 tools/make_transcript_md.py "病历资料/住院/<姓名>" --code DA00NN
+# ⑥ 平台验证：工作台任务卡 → 录音回放（真实转写）→ 过程稿(MD) → 生成 → 四色确认 → 归档
 
 # 演示动线与降级预案（院方汇报用，docs/）
 # docs/演示脚本_5分钟.md —— 预检清单 → 5 分钟动线 → 量化结论 → 降级预案 → Q&A

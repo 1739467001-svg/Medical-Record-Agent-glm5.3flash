@@ -641,11 +641,12 @@ function renderTranscriptResult(tp, key){
     </div>`).join("") + `
     <div class="md-doc">
       <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${adm.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">🎙 真实录音转写</span>' : ''}${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
-      <div class="md-body">问诊记录_${keyCode(key)}_${adm.admit_ts || ""}.md&nbsp;&nbsp;·&nbsp;&nbsp;${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : adm.real_recording ? " · 本地转写 · LLM 角色标注" : " · 医生/患者角色已分离"} · 全文可溯源</div>
+      <div class="md-body">${adm.transcript_md ? `<a href="data/${adm.transcript_md}" target="_blank" style="color:var(--primary);font-weight:600">${esc(adm.transcript_md)}</a> · ` : `问诊记录_${keyCode(key)}_${adm.admit_ts || ""}.md&nbsp;&nbsp;·&nbsp;&nbsp;`}${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : adm.real_recording ? " · 本地转写 · LLM 角色标注" : " · 医生/患者角色已分离"} · 全文可溯源</div>
       ${(meta && (meta.warnings || []).length) ? `<div style="font-size:11px;color:var(--yellow);margin-top:6px">⚠ ${esc(meta.warnings.join("；"))}</div>` : ""}
       <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn primary big" id="gen-cta">⚙ 生成入院记录草稿（多智能体）</button>
         <button class="btn big" id="edit-ts">✎ 修正过程稿</button>
+        ${adm.transcript_md ? `<button class="btn big" onclick="window.open('data/${esc(adm.transcript_md)}','_blank')">📄 查看问诊过程稿（MD）</button>` : ""}
       </div>
     </div>`;
   document.getElementById("gen-cta").onclick = () => { const st2 = flowState(key); st2.step = 2; persistFlow(key); viewAdmissionKey(key); };
