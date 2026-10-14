@@ -254,12 +254,15 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(raw)
             engine = asr_mcp_server.pick_engine(None)
             t = engine.transcribe(tmp, speakers=bool(body.get("speakers", True)))
-            t, _hot = asr_mcp_server.correct_hotwords(t)
+            # 统一后处理管线（引擎无关）：热词修正 + 可选 LLM 方言纠错（前端开关，默认关）
+            t = asr_mcp_server.postprocess(t, correct=True,
+                                           llm_polish=bool(body.get("llm_polish", False)))
             d = t.to_dict()
             auth.audit_log(u, "asr_transcribe", filename,
                            f"engine={d['engine']}·时长{d.get('duration_sec') or '?'}s·{len(d.get('segments') or [])}段"
-                           + (f"·热词{len(_hot)}" if _hot else ""))
+                           + ("·LLM纠错" if body.get("llm_polish") else ""))
             return self._json(200, {"ok": True, "engine": d["engine"], "text": d["text"],
+                                    "text_raw": d.get("text_raw"),
                                     "segments": d["segments"], "duration_sec": d.get("duration_sec"),
                                     "mock": bool(d.get("mock")), "warnings": d.get("warnings") or [],
                                     "transcribed_at": time.strftime("%Y-%m-%d %H:%M:%S")})

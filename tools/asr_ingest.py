@@ -146,17 +146,24 @@ def cmd_transcribe(audio_dir, engine_name):
         t0 = time.time()
         try:
             t = engine.transcribe(src, speakers=True)
-            t, _hot = asr_mcp_server.correct_hotwords(t)
+            # 统一后处理管线：热词修正 + 可选 LLM 方言纠错（ASR_LLM_POLISH=1 且已配 LLM 密钥；
+            # 原文以 text_raw 留痕，双版本落盘——评测层可分别评测纠错前后）
+            llm_polish = os.environ.get("ASR_LLM_POLISH") == "1" and bool(os.environ.get("LLM_API_BASE"))
+            t = asr_mcp_server.postprocess(t, correct=True, llm_polish=llm_polish)
             d = t.to_dict()
-            if _hot:
-                print(f"    热词修正 {len(_hot)} 处：{'；'.join(_hot)}")
+            hot_warn = next((w for w in d.get("warnings", []) if "热词修正" in w), "")
+            if hot_warn:
+                print(f"    {hot_warn}")
+            if d.get("text_raw") and d.get("text_raw") != d.get("text"):
+                with open(os.path.join(out_dir, base + ".原.txt"), "w", encoding="utf-8") as f:
+                    f.write(d["text_raw"])
             with open(os.path.join(out_dir, base + ".txt"), "w", encoding="utf-8") as f:
                 f.write(d.get("text") or "")
             with open(os.path.join(out_dir, base + ".json"), "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False, indent=1)
             done += 1
             print(f"  ✓ {r['file']} → {base}.txt（{d.get('engine')}，{time.time()-t0:.1f}s，"
-                  f"{len(d.get('segments') or [])} 段）")
+                  f"{len(d.get('segments') or [])} 段{' · LLM纠错已应用（原文存 .原.txt）' if d.get('text_raw') and d['text_raw'] != d['text'] else ''}）")
         except Exception as e:
             failed.append(f"{r['file']}: {e}")
             print(f"  ✗ {r['file']} — {e}")

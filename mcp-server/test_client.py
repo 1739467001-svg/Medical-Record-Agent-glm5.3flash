@@ -30,7 +30,7 @@ def main():
     c.call("notifications/initialized")
     r = c.call("tools/list", {}, 2)
     tools = [t["name"] for t in r["result"]["tools"]]
-    assert tools == ["asr_engines", "asr_prepare_audio", "asr_transcribe"], tools
+    assert tools == ["asr_engines", "asr_prepare_audio", "asr_transcribe", "asr_compare"], tools
     print("[2] tools/list OK:", tools)
     r = c.call("tools/call", {"name": "asr_engines", "arguments": {}}, 3)
     engines = json.loads(r["result"]["content"][0]["text"])

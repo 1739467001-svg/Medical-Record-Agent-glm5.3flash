@@ -32,7 +32,7 @@ ASR MCP Server（语音识别模型上下文协议服务器）
     "mock": false, "warnings": ["…"]
   }
 """
-import os, sys, io, json, base64, hashlib, hmac, struct, time, urllib.parse
+import os, re, sys, io, json, base64, hashlib, hmac, struct, time, urllib.parse
 from typing import Optional
 
 # ---------------- 音频预处理 ----------------
@@ -106,10 +106,11 @@ class Transcript:
         self.engine, self.audio, self.text = engine, audio, text
         self.segments = segments
         self.mock, self.warnings = mock, warnings or []
+        self.text_raw = text  # LLM 纠错前原文（双版本留痕；correct_hotwords 不改此字段）
     def to_dict(self):
         return {"engine": self.engine, "audio": self.audio,
                 "duration_sec": wav_duration_sec(self.audio) if self.audio.lower().endswith(".wav") else None,
-                "text": self.text, "language": "zh",
+                "text": self.text, "text_raw": self.text_raw, "language": "zh",
                 "segments": self.segments, "mock": self.mock, "warnings": self.warnings}
 
 # ---------------- 医疗热词后处理（PRD D4：同音听错纠正，保守短语规则） ----------------
@@ -204,14 +205,26 @@ class MockEngine(BaseEngine):
                           warnings=["模拟引擎输出，不可用于任何评测或归档场景"])
 
 class XfyunEngine(BaseEngine):
-    """讯飞 实时语音转写 RTASR（流式 WebSocket，适合长录音）。密钥就绪后即可接入。
-    签名与分片参数以讯飞官方文档为准，接入联调时核对（HTTPS 控制台申请 appid/api_key）。"""
+    """讯飞语音识别（可插拔两种接口形态，密钥后补即用；签名/分片以官方文档为准，联调时核对）：
+
+    A. RTASR 实时语音转写（wss://rtasr.xfyun.cn/v1/ws）——流式 WebSocket，适合长录音与实时字幕。
+       鉴权：appid + ts + signa（HMAC-SHA256(base64(md5(apiKey)), appid+ts) 再 base64+urlencode）。
+       发送：裸音频分片 1280B/40ms，间隔 40ms，结束发 {"end": true}。
+       返回：action=result 的 data 内按 seg_id 分段（type=2 为最终结果）。
+    B. SFASR 一句话/短语音（ws://sfasr 或 HTTPS api）——短问诊片段备用。
+    选择：ASR_XFYUN_MODE=rtasr|sfasr（默认 rtasr）。热词：ASR_XFYUN_HOTWORDS（名称，
+    讯飞控制台预制热词表；未配置时退化为本地热词后处理 correct_hotwords）。
+    角色分离：RTASR 多说话人需订正版/企业版（返回 rl 内 spk 字段）；基础版无角色，
+    segments.speaker 标"未分离"由后处理标注（与本地 whisper 同策略）。"""
     name = "xfyun"
     def configured(self): return bool(os.environ.get("ASR_XFYUN_APP_ID") and os.environ.get("ASR_XFYUN_API_KEY"))
     def status(self):
         return {"ready": self.configured(),
-                "note": "讯飞实时语音转写 RTASR：WebSocket 流式、长录音、支持热词；需 websocket-client",
-                "env": ["ASR_XFYUN_APP_ID", "ASR_XFYUN_API_KEY"]}
+                "note": f"讯飞{'RTASR 实时转写' if os.environ.get('ASR_XFYUN_MODE', 'rtasr') == 'rtasr' else '短语音'}："
+                        "WebSocket 流式、医疗热词（控制台热词表或本地后处理）、多说话人需订正版",
+                "env": ["ASR_XFYUN_APP_ID", "ASR_XFYUN_API_KEY",
+                        "ASR_XFYUN_MODE(=rtasr|sfasr)", "ASR_XFYUN_HOTWORDS(热词表名,可选)"],
+                "deps": "pip install websocket-client"}
     def _signa(self, app_id, api_key, ts):
         base_string = str(app_id) + str(ts)
         md5 = hashlib.md5(api_key.encode()).digest()
@@ -225,41 +238,77 @@ class XfyunEngine(BaseEngine):
             import websocket  # websocket-client
         except ImportError:
             raise RuntimeError("缺少依赖：pip install websocket-client")
+        mode = os.environ.get("ASR_XFYUN_MODE", "rtasr")
+        if mode == "sfasr":
+            raise RuntimeError("sfasr 短语音模式待接口文档到位后实现（当前可用 rtasr）")
         wav = prepare_audio(audio_path)
         app_id, api_key = os.environ["ASR_XFYUN_APP_ID"], os.environ["ASR_XFYUN_API_KEY"]
         ts = int(time.time())
         url = f"wss://rtasr.xfyun.cn/v1/ws?appid={app_id}&ts={ts}&signa={self._signa(app_id, api_key, ts)}"
-        # TODO(接入联调时核对)：①签名算法 ②结果消息的 action/code 约定 ③热词参数——以讯飞官方文档为准
+        hw = os.environ.get("ASR_XFYUN_HOTWORDS", "")
+        if hw:
+            # 热词表名走 URL 参数（讯飞 RTASR 约定，联调核对）；未订正版会被服务端忽略
+            url += f"&hotword={urllib.parse.quote(hw)}"
         frames = open(wav, "rb").read()
         piece = 1280  # 40ms @16kHz 16bit 单声道
-        order = {}  # seg_id -> text（RTASR 按 seg_id 分段返回）
-        # 超时兜底：假签名/网络异常时讯飞可能长时间不应答，连接与读超时各 15s（联调实测）
+        order = {}    # seg_id -> text（RTASR 按 seg_id 分段返回）
+        spoke = {}    # seg_id -> spk（订正版多说话人；基础版无此字段）
+        done_seg = set()
+        # 超时兜底：假签名/网络异常时讯飞可能长时间不应答，连接与读超时各 15s
         ws = websocket.create_connection(url, timeout=15)
         try:
             for i in range(0, len(frames), piece):
                 ws.send(frames[i:i + piece])
                 time.sleep(0.04)
             ws.send(b'{"end": true}')
+            idle = 0
             while True:
-                raw = ws.recv()
-                if not raw: break
-                msg = json.loads(raw)
+                try:
+                    raw = ws.recv()
+                except Exception:
+                    break
+                if not raw:
+                    break
+                idle = 0
+                try:
+                    msg = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
                 if msg.get("action") == "error" or (msg.get("code") not in (None, 0, "0")):
                     raise RuntimeError(f"讯飞返回错误: {msg}")
                 if msg.get("action") == "result":
                     data = json.loads(msg.get("data") or "{}")
                     seg_id = data.get("seg_id")
-                    text = "".join(w["cw"][0]["w"] for rl in data.get("rl", []) for w in rl.get("ws", []))
+                    # ws 段内 cw 数组取每个候选首位（首候选=最优）；rl 支持多说话人 spk 字段
+                    text, spk = "", None
+                    for ri, rl in enumerate(data.get("rl", [])):
+                        text += "".join(w.get("cw", [{}])[0].get("w", "") for w in rl.get("ws", []))
+                        if rl.get("spk") is not None and spk is None:
+                            spk = rl.get("spk")
                     if seg_id is not None and text:
                         order[int(seg_id)] = text
-                    if data.get("type") in ("0", 0):  # 官方约定：最终结果标记，接入时核对
+                        if spk is not None:
+                            spoke[int(seg_id)] = spk
+                    if str(data.get("type")) in ("2", 2):
+                        done_seg.add(seg_id)
+                    # 终止：收到全部最终段或服务端关闭（"type=2 为最终结果"，联调核对）
+                    if done_seg and len(done_seg) >= len(order):
                         break
         finally:
             ws.close()
         texts = [order[k] for k in sorted(order)]
-        segs = [{"start": None, "end": None, "speaker": "未分离" if speakers else "-", "text": t} for t in texts]
-        return Transcript("xfyun", audio_path, "".join(texts), segs,
-                          warnings=["RTASR 单声道不带角色信息：说话人分离由 P1 后处理模块实现（对齐 PRD F2）"])
+        has_spk = bool(spoke)
+        segs = []
+        for k in sorted(order):
+            segs.append({"start": None, "end": None,
+                         "speaker": (f"说话人{spoke[k]+1}" if has_spk and speakers else ("未分离" if speakers else "-")),
+                         "text": order[k]})
+        warns = []
+        if not has_spk:
+            warns.append("RTASR 基础版不带说话人分离：角色由后处理标注（订正版返回 spk 字段可直接用）")
+        if hw:
+            warns.append(f"已请求讯飞热词表「{hw}」（生效需控制台预制；本地热词后处理兜底仍会执行）")
+        return Transcript("xfyun", audio_path, "".join(texts), segs, warnings=warns)
 
 class AliyunEngine(BaseEngine):
     """阿里云 智能语音交互·录音文件识别（HTTP 提交+轮询，自带说话人分离）。密钥就绪后接入。"""
@@ -350,6 +399,62 @@ def pick_engine(name: Optional[str]) -> BaseEngine:
         raise ValueError(f"未知引擎 {name}，可用：{list(ENGINES)}")
     return ENGINES[name]
 
+# ---------------- 转写后处理管线（引擎无关，新引擎到即享） ----------------
+def postprocess(transcript, correct=True, llm_polish=False):
+    """统一后处理：①热词同音修正（默认开，留痕）②可选 LLM 方言纠错级联（双版本留痕）。
+    所有引擎（含云端）的转写结果都应过此管线再进抽取/生成——修正清单与原文随 Transcript
+    下发，四色确认页可溯源到转写原话（绿字段红线：修正不改写语义）。"""
+    if correct:
+        transcript, _ = correct_hotwords(transcript)
+    if llm_polish and os.environ.get("LLM_API_BASE") and transcript.text:
+        try:
+            transcript = dialect_polish(transcript)
+        except Exception as e:
+            transcript.warnings.append(f"LLM 方言纠错降级（保留原转写）: {e}")
+    return transcript
+
+def dialect_polish(transcript):
+    """LLM 方言同音纠错级联（患者F 评测结论 #4 的落地）：只修同音讹变不改语义，
+    原文以 text_raw 保留在 Transcript 上（双版本留痕，溯源红线）。
+    实测调优（患者F 第一轮：仅"只纠错"指令时模型几乎原样复读，0 处有效修正）：
+    ①明确给出纠错示例对（做俩→昨天、观点有→没见好、有关→过敏、走些→做）；
+    ②要求输出修正清单，便于人工核对与留痕；③声明"听不清处保留原字，禁止臆改"。"""
+    import urllib.request
+    prompt = (
+        "你是山东西区方言医患对话的转写校对员。下面这份 ASR 转写稿含方言同音讹变，"
+        "请逐处纠正为正确词，输出 JSON：{\"text\":\"纠错后全文\",\"corrections\":"
+        "[{\"before\":\"原文片段\",\"after\":\"纠正后\"}]}。\n"
+        "已知方言/同音讹变对照（供参考，不限于此）：做俩=昨天；观点有=没见好；"
+        "把人厉害=疼得厉害；聊点多=七点多；通过=痛过（病史语境）；有关=过敏（药物语境）；"
+        "走些手术/走手术=做手术；给它还疼=这儿还疼；瞪瞪吧=等等吧；手势力=化验；"
+        "行李=难受/不舒服；条子=身体；小指=小针。\n"
+        "规则：只纠同音讹变与口语粘连，不增删医学信息、不改数字；听不清处保留原字；"
+        "修正逐处列入 corrections（原文片段须与稿中完全一致）。\n\n" + transcript.text[:5000])
+    body = json.dumps({"model": os.environ.get("LLM_MODEL", "Deepseek-v4-flash"),
+                       "messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": 4000, "temperature": 0.1}).encode()
+    req = urllib.request.Request(os.environ["LLM_API_BASE"].rstrip("/") + "/chat/completions",
+                                 data=body, headers={"Content-Type": "application/json",
+                                                     "Authorization": "Bearer " + os.environ["LLM_API_KEY"]})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        out = json.loads(r.read().decode())["choices"][0]["message"]["content"].strip()
+    out = re.sub(r"^```(json)?|```$", "", out.strip(), flags=re.M).strip()
+    try:
+        data = json.loads(out)
+        polished = str(data.get("text") or "").strip()
+        corrections = data.get("corrections") or []
+    except (ValueError, AttributeError):
+        polished, corrections = out, []
+    if not polished or len(polished) < len(transcript.text) * 0.5:
+        transcript.warnings.append("LLM 纠错输出异常（长度骤减或为空），已放弃")
+        return transcript
+    transcript.text_raw = transcript.text                 # 双版本：原文保留可溯源
+    transcript.text = polished
+    transcript.corrections = corrections
+    transcript.warnings.append(
+        f"LLM 方言纠错已应用（{len(corrections)} 处；原文以 text_raw 保留，修正清单见 corrections）")
+    return transcript
+
 # ---------------- MCP stdio 协议（换行分隔 JSON-RPC 2.0） ----------------
 SERVER_INFO = {"name": "donge-asr-mcp", "version": "0.1.0"}
 TOOLS = [
@@ -358,10 +463,19 @@ TOOLS = [
     {"name": "asr_prepare_audio", "description": "音频预处理：转 16kHz 单声道 WAV（各引擎通用前置）",
      "inputSchema": {"type": "object", "properties": {
          "audio_path": {"type": "string"}, "out_dir": {"type": "string"}}, "required": ["audio_path"]}},
-    {"name": "asr_transcribe", "description": "语音转写：返回统一 Transcript（全文 + 分段 + 说话人）。engine 可选 mock/xfyun/aliyun/sensetime/local-whisper，缺省取 ASR_DEFAULT_ENGINE",
+    {"name": "asr_transcribe", "description": "语音转写：返回统一 Transcript（全文 + text_raw 原文 + 分段 + 说话人）。engine 可选 mock/xfyun/aliyun/sensetime/local-whisper，缺省取 ASR_DEFAULT_ENGINE。correct=热词修正（默认开）；llm_polish=LLM 方言纠错级联（默认关，原文以 text_raw 留痕）",
      "inputSchema": {"type": "object", "properties": {
          "audio_path": {"type": "string", "description": "音频文件路径（m4a/wav/mp3 等，自动预处理）"},
-         "engine": {"type": "string"}, "speakers": {"type": "boolean", "default": True}},
+         "engine": {"type": "string"}, "speakers": {"type": "boolean", "default": True},
+         "correct": {"type": "boolean", "default": True},
+         "llm_polish": {"type": "boolean", "default": False}},
+         "required": ["audio_path"]}},
+    {"name": "asr_compare", "description": "多引擎同题对比评测：同一音频跑多个引擎，输出各引擎转写全文与段数（引擎选型/验收用；需各引擎密钥就绪）",
+     "inputSchema": {"type": "object", "properties": {
+         "audio_path": {"type": "string"},
+         "engines": {"type": "array", "items": {"type": "string"},
+                     "description": "对比引擎清单，缺省全部已配置引擎"},
+         "llm_polish": {"type": "boolean", "default": False}},
          "required": ["audio_path"]}},
 ]
 
@@ -384,9 +498,29 @@ def handle(req):
             elif name == "asr_prepare_audio":
                 data = {"wav_16k": prepare_audio(args["audio_path"], args.get("out_dir", ""))}
             elif name == "asr_transcribe":
-                t = pick_engine(args.get("engine")).transcribe(
-                    args["audio_path"], speakers=bool(args.get("speakers", True)))
+                eng = pick_engine(args.get("engine"))
+                t = eng.transcribe(args["audio_path"], speakers=bool(args.get("speakers", True)))
+                # 统一后处理管线：热词修正（默认）+ 可选 LLM 方言纠错（llm_polish=1 时）
+                t = postprocess(t, correct=bool(args.get("correct", True)),
+                                llm_polish=bool(args.get("llm_polish", False)))
                 data = t.to_dict()
+            elif name == "asr_compare":
+                want = args.get("engines") or [n for n, e in ENGINES.items()
+                                               if n != "mock" and e.configured()]
+                out = {}
+                for n in want:
+                    if n not in ENGINES:
+                        out[n] = {"error": f"未知引擎 {n}"}
+                        continue
+                    try:
+                        t = ENGINES[n].transcribe(args["audio_path"], speakers=True)
+                        t = postprocess(t, correct=True, llm_polish=bool(args.get("llm_polish", False)))
+                        d = t.to_dict()
+                        out[n] = {"text": d["text"][:800], "n_segments": len(d["segments"]),
+                                  "duration_sec": d["duration_sec"], "warnings": d["warnings"][:3]}
+                    except Exception as e:
+                        out[n] = {"error": str(e)[:200]}
+                data = out
             else:
                 raise ValueError(f"未知工具 {name}")
             return {"jsonrpc": "2.0", "id": rid, "result": {
