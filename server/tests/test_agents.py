@@ -132,5 +132,69 @@ class TestQcNormalizeBackflow(unittest.TestCase):
         self.assertTrue(any(b["label"] == "体温" for b in tr["report"]["blocked"]))
 
 
+class TestDocCutoff(unittest.TestCase):
+    """时间穿越防线（患者F 实证）：入院记录写于入院当时，术后数据（病理/复查/术后申请单）
+    不得进入素材。DOC_CUTOFF 环境变量由评测层按文书锚点传入。"""
+
+    D = staticmethod(lambda days: 46297.0 + days)  # 2026-10-02 基准的 Excel 序列号
+
+    def _views(self):
+        adm = self.D(0)
+        return {
+            "生命体征": [
+                {"VITAL_SIGNS": "入院", "TIME_POINT": adm},
+                {"VITAL_SIGNS": "脉搏", "VITAL_SIGNS_CVALUES": "103", "TIME_POINT": adm},
+                {"VITAL_SIGNS": "脉搏", "VITAL_SIGNS_CVALUES": "88", "TIME_POINT": self.D(3)},   # 术后
+            ],
+            "检查申请主表": [
+                {"EXAM_NO": "1", "EXAM_DATE_TIME": adm, "CLIN_DIAG": "阑尾炎", "EXAM_SUB_CLASS": "CT"},
+                {"EXAM_NO": "2", "EXAM_DATE_TIME": self.D(4), "CLIN_DIAG": "阑尾炎术后"},          # 术后复查
+            ],
+            "检查申请项目": [{"EXAM_NO": "1", "EXAM_ITEM": "CT下腹部平扫"},
+                             {"EXAM_NO": "2", "EXAM_ITEM": "彩超腹部检查"}],
+            "检查结果": [
+                {"EXAM_NO": "1", "IMPRESSION": "阑尾炎。"},
+                {"EXAM_NO": "2", "IMPRESSION": "阑尾炎术后所见"},                                   # 术后复查报告
+            ],
+            "检验结果": [
+                {"REPORT_ITEM_NAME": "白细胞", "RESULT": "19.15", "ABNORMAL_INDICATOR": "H",
+                 "RESULT_DATE_TIME": adm},
+                {"REPORT_ITEM_NAME": "降钙素原", "RESULT": "1.98", "ABNORMAL_INDICATOR": "H",
+                 "RESULT_DATE_TIME": self.D(3)},                                                    # 术后复查值
+            ],
+            "医嘱": [
+                {"ORDER_TEXT": "血液分析", "START_DATE_TIME": adm},
+                {"ORDER_TEXT": "今日出院", "START_DATE_TIME": self.D(6)},                            # 出院日医嘱
+            ],
+        }
+
+    def test_cutoff_excludes_post_op_data(self):
+        from agents import aggregator
+        os.environ["DOC_CUTOFF"] = "2026-10-03T00:00:00"   # 入院次日 0 点
+        try:
+            ds = aggregator.from_his_views(self._views())
+        finally:
+            os.environ.pop("DOC_CUTOFF", None)
+        # 术后复查检查/报告被截断：只剩术前 CT
+        self.assertEqual([e["item"] for e in ds["exams"]], ["CT下腹部平扫"])
+        self.assertTrue(all("术后" not in e["impression"] for e in ds["exams"]))
+        # 术后复查检验值被截断
+        self.assertEqual([l["item"] for l in ds["abnormal_labs"]], ["白细胞"])
+        # 术后申请单诊断不污染 clinic_diags
+        self.assertEqual(ds["clinic_diags"], ["阑尾炎"])
+        # 出院日医嘱被截断
+        self.assertTrue(all(o["text"] != "今日出院" for o in ds["orders"]))
+        # 体征仍在锚点 ±24h 窗口（不受截断影响）
+        self.assertEqual(ds["vitals"].get("脉搏"), "103")
+
+    def test_no_cutoff_keeps_all(self):
+        from agents import aggregator
+        os.environ.pop("DOC_CUTOFF", None)
+        ds = aggregator.from_his_views(self._views())
+        self.assertEqual(len(ds["exams"]), 2)
+        self.assertEqual(len(ds["abnormal_labs"]), 2)
+        self.assertIn("今日出院", [o["text"] for o in ds["orders"]])
+
+
 if __name__ == "__main__":
     unittest.main()

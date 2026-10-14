@@ -10,12 +10,101 @@
 存储：与 auth 同连接层（生产 MySQL / 研发 SQLite 自动降级）；首次建表时播种演示数据，
 保证上级医师/质控科登录即可看到审签工作台的真实效果。
 """
-import json, time, sys
+import glob, json, os, time, sys
 import auth
 
 STATUS_NAMES = {"submitted": "待上级医师审签", "signed": "已审签", "rejected": "已退回"}
 SPOT_NAMES = {"ok": "抽查合格", "issue": "抽查缺陷", "": "未抽查"}
 Q = "%s" if auth.BACKEND == "mysql" else "?"
+
+# 金标准目录（模板 zip 来源；本地仓库相对路径 / 容器挂载路径兼容）
+_GOLD_DIRS = [
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "病历资料", "住院"),
+    os.environ.get("MRA_GOLD_DIR", "/gold"),
+]
+# 文书类型 → 模板 zip 内文件名前缀（zip 命名 = 类型_标题_时间戳.xml）
+_DOC_TEMPLATE_PREFIX = {
+    "入院记录": "入院记录",
+    "首次病程记录": "病程记录_首次病程记录",
+    "手术记录": "手术记录",
+    "出院记录": "出院记录",
+}
+
+
+def _find_template_zip(patient_code, disease=""):
+    """按患者代号找金标准 zip。映射文件是 {真实姓名: 患者X}（评测层同源），需反查；
+    患者F（DA0006）等新案例无金标准 zip → 兜底用其他患者的文书模板（模板结构与具体
+    患者无关）。兜底优先同病种（zip 内文书文件名含 disease，如"入院记录_阑尾炎_…"），
+    避免用肺炎模板写阑尾炎文书。返回患者目录。"""
+    mapping_path = os.path.join(os.path.dirname(_GOLD_DIRS[0]), "患者代号映射.json")
+    real_name = None
+    try:
+        mapping = json.load(open(mapping_path, encoding="utf-8"))
+        inv = {v: k for k, v in mapping.items()}
+        real_name = inv.get(patient_code)
+    except Exception:
+        pass
+    candidates = []   # (优先级, 目录)：0=本人 1=同病种 2=任意
+    for gold_dir in _GOLD_DIRS:
+        if not os.path.isdir(gold_dir):
+            continue
+        if real_name:
+            pdir = os.path.join(gold_dir, real_name)
+            if os.path.isdir(pdir) and glob.glob(os.path.join(pdir, "*.zip")):
+                candidates.append((0, pdir))
+        for sub in sorted(os.listdir(gold_dir)):
+            p = os.path.join(gold_dir, sub)
+            if not os.path.isdir(p) or not glob.glob(os.path.join(p, "*.zip")):
+                continue
+            if disease and _zip_has_disease(p, disease):
+                candidates.append((1, p))
+            else:
+                candidates.append((2, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def _zip_has_disease(pdir, disease):
+    """目录下任一 zip 内文书文件名含病种名（如 阑尾炎）。"""
+    import zipfile
+    if not disease:
+        return False
+    core = disease.replace("急性", "").replace("慢性", "").replace("（手术）", "").strip()
+    if len(core) < 2:
+        return False
+    for zp in glob.glob(os.path.join(pdir, "*.zip")):
+        try:
+            with zipfile.ZipFile(zp) as zf:
+                for n in zf.namelist():
+                    try:
+                        fn = n.encode("cp437").decode("gbk")
+                    except Exception:
+                        fn = n
+                    if core in fn:
+                        return True
+        except Exception:
+            continue
+    return False
+
+
+def _template_backfill(patient_code, doc_type, fields, disease=""):
+    """归档包字段 → 真实模板原位回填（P3 前置）。返回 (xml, stats, 模板文件名)。"""
+    pdir = _find_template_zip(patient_code, disease)
+    if not pdir:
+        return None, {"error": "未找到可用模板目录（金标准 zips 不可用）"}, None
+    prefix = _DOC_TEMPLATE_PREFIX.get(doc_type, doc_type)
+    zips = sorted(glob.glob(os.path.join(pdir, "*.zip")))
+    if not zips:
+        return None, {"error": "模板目录无 zip"}, None
+    import template_backfill as tb
+    # 首个 zip 不含目标文书时向后找（如患者目录首个 zip 只有手术记录）
+    for zp in zips:
+        xml, stats, fn = tb.backfill_from_zip(zp, prefix, fields, patient_facts={})
+        if xml is not None:
+            return xml, stats, fn
+    return None, {"error": f"所有模板 zip 均未找到「{prefix}」"}, None
 
 # 审计动作中文名（P2-K 审计留痕；与 auth.audit_log 写入的 action 对应）
 AUDIT_ACTION_NAMES = {
@@ -59,7 +148,7 @@ def init_db():
         resident_id INTEGER NOT NULL,
         resident_name TEXT NOT NULL,
         fields_json TEXT NOT NULL,
-        qc_json TEXT, edits_json TEXT, xml_text TEXT,
+        qc_json TEXT, edits_json TEXT, xml_text TEXT,  /* SQLite 动态类型无 MEDIUM；完整模板 XML ~260K 可存 */
         total_cnt INTEGER NOT NULL DEFAULT 0,
         yellow_cnt INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'submitted',
@@ -263,12 +352,24 @@ def do_submit(handler, body, u):
             "fields": json.dumps(fields, ensure_ascii=False),
             "qc": json.dumps(body.get("qc") or {}, ensure_ascii=False),
             "edits": json.dumps(body.get("edits") or [], ensure_ascii=False),
-            "xml": str(body.get("xml") or "")[:200000],
+            "xml": str(body.get("xml") or "")[:500000],
             "total": len([f for f in fields if f.get("label")]),
             "yellow": len([f for f in fields if f.get("label") and not str(f.get("value") or "").strip()]),
         }
     except Exception as e:
         return handler._json(400, {"error": f"归档包解析失败: {e}"})
+    # P3 对接前置：XTextDocument 模板原位回填（server/template_backfill.py）。
+    # 前端传来的 xml 是简化占位版；此处用金标准模板 zip + fields 生成可直接导入院内
+    # 编辑器的完整文书（无模板可用时保留原 xml，失败不阻断归档）。模板 zip 从患者目录
+    # 按文档类型自动定位（git 忽略区金标准；容器内挂载路径兼容；新案例兜底同病种模板）。
+    backfill_stats = None
+    try:
+        xml_filled, backfill_stats, tpl_fn = _template_backfill(
+            rec["code"], rec["doc"], fields, disease=rec["disease"])
+        if xml_filled:
+            rec["xml"] = xml_filled[:500000]
+    except Exception as e:
+        print(f"[records] 模板回填降级（不阻断归档）: {e}", file=sys.stderr)
     day = time.strftime("%Y%m%d")
     conn = auth._connect()
     try:

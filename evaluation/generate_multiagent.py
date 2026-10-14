@@ -18,7 +18,14 @@ if _AGENTS_PATH not in sys.path:
     sys.path.insert(0, _AGENTS_PATH)
 from agents import run_pipeline  # noqa: E402
 
-_MODE = os.environ.get("MULTIAGENT_MODE", "A")
+_MODE = None
+
+def _mode():
+    """运行时读取（模块导入时机不可控：评测脚本先 import 后设环境变量的情况实测踩过）。"""
+    global _MODE
+    if _MODE is None or os.environ.get("MULTIAGENT_MODE", "A") != _MODE:
+        _MODE = os.environ.get("MULTIAGENT_MODE", "A")
+    return _MODE
 _DIALOGUE = None
 
 # 各文书类型的住院窗口（天）：首程/入院记录以入院日为中心；出院记录覆盖整个住院过程
@@ -66,16 +73,26 @@ def _filter_views_by_stay(views, stay_dt, doc_type):
 def generate(gold_fields, views, anchor="入院", doc_type="入院记录", stay_dt=None):
     labels = {f["label"] for f in gold_fields}
     transcript = None
-    if _MODE == "B" and doc_type == "入院记录":
+    if _mode() == "B" and doc_type == "入院记录":
         transcript = _dialogue()
-    elif _MODE == "C":
+    elif _mode() == "C":
         p = os.environ.get("REHEARSAL_TRANSCRIPT", "")
         if p and os.path.exists(p):
             transcript = open(p, encoding="utf-8").read().strip()
         elif p:
             print(f"[mode-C] 转写稿不存在：{p}（降级为无录音模式）", file=sys.stderr)
-    r = run_pipeline(transcript=transcript, his_views=_filter_views_by_stay(views, stay_dt, doc_type),
-                     doc_type=doc_type, target_labels=labels)
+    views = _filter_views_by_stay(views, stay_dt, doc_type)
+    # 文书锚点时刻截断（时间穿越防线，患者F 实证）：入院记录/首程写于入院当时，
+    # 晚于锚点的术后数据（病理/复查）不得进入素材；出院记录覆盖全程不截断。
+    if stay_dt and doc_type in ("入院记录", "首次病程记录"):
+        os.environ["DOC_CUTOFF"] = (stay_dt + datetime.timedelta(days=1)).isoformat()
+    else:
+        os.environ.pop("DOC_CUTOFF", None)
+    try:
+        r = run_pipeline(transcript=transcript, his_views=views,
+                         doc_type=doc_type, target_labels=labels)
+    finally:
+        os.environ.pop("DOC_CUTOFF", None)
     gen = {}
     for f in r["fields"]:
         gen[f["label"]] = f["value"]

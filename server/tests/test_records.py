@@ -240,5 +240,87 @@ class TestArchiveExport(unittest.TestCase):
         self.assertEqual(h2.status, 404)
 
 
+class TestTemplateBackfill(unittest.TestCase):
+    """P3 对接前置：XTextDocument 模板原位回填（server/template_backfill.py）。
+    用真实金标准 zip 验证三条红线：新值就位 / 旧患者值 0 残留 / BodyText 缓存重建。
+    zip 在 git 忽略区（病历资料/），无该目录时整类跳过（本地体检全覆盖）。"""
+    GOLD = os.path.join(os.path.dirname(SERVER_DIR), "病历资料", "住院")
+    ZIPS = sorted(__import__("glob").glob(os.path.join(GOLD, "*", "*.zip"))) if os.path.isdir(GOLD) else []
+    @classmethod
+    def setUpClass(cls):
+        if not cls.ZIPS:
+            raise unittest.SkipTest("无金标准 zip（git 忽略区），跳过模板回填实测")
+        import template_backfill as tb
+        cls.tb = tb
+        # 旧患者真名不硬编码进测试（红线：真名零入库）——从模板 name 绑定域动态取
+        root, _ = tb.load_template(cls.ZIPS[0], "入院记录")
+        for inp in tb.root_inputs(root):
+            bp = inp.find(".//BindingPath")
+            iv = inp.find("InnerValue")
+            if bp is not None and bp.text == "name" and iv is not None and iv.text:
+                cls._TEMPLATE_PATIENT_NAME = iv.text.strip()
+                break
+
+    def test_backfill_new_values_in_place(self):
+        root, _ = self.tb.load_template(self.ZIPS[0], "入院记录")
+        fields = [{"label": "主诉", "value": "腹痛1天"},
+                  {"label": "体温", "value": "36.6"},
+                  {"label": "初步诊断", "value": "1.阑尾炎"}]
+        xml, stats = self.tb.backfill(root, fields, patient_facts={"name": "患者F"})
+        self.assertGreaterEqual(stats["filled"], 3)
+        self.assertIn("腹痛1天", xml)
+        self.assertIn("阑尾炎", xml)
+
+    def test_no_residue_of_template_patient(self):
+        """模板即金标准文书（自带旧患者真实值）——未对位域必须清空，绝不残留。
+        只校验【数据节点】（InnerValue/XString 的 Text）：ToolTip/DefaultEventExpression
+        等模板属性里出现的临床词是模板固有内容（与患者无关），不算残留。"""
+        root, _ = self.tb.load_template(self.ZIPS[0], "入院记录")
+        old_vals = set()
+        for inp in self.tb.root_inputs(root):
+            iv = inp.find("InnerValue")
+            if iv is not None and iv.text and len(iv.text.strip()) >= 4:
+                old_vals.add(iv.text.strip())
+        xml, stats = self.tb.backfill(root, [{"label": "主诉", "value": "腹痛1天"}],
+                                      patient_facts={"name": "患者F"})
+        # InnerValue / XString.Text 数据节点中不得出现任何旧患者值。
+        # 标签式复合值（如另一域原文含子串"外生殖器："）不算残留——判定用词边界：
+        # 旧值必须作为独立节点文本出现（== 比较），子串命中仅当节点值与旧值完全一致。
+        import xml.etree.ElementTree as ET
+        r2 = ET.fromstring(xml[len('<?xml version="1.0" encoding="UTF-8"?>\n'):])
+        data_nodes = set()
+        for el in r2.iter():
+            if el.tag in ("InnerValue", "Text") and el.text:
+                data_nodes.add(el.text.strip())
+        residue = sorted(v for v in old_vals if v in data_nodes)
+        self.assertEqual(residue, [], f"旧患者值残留于数据节点: {residue[:5]}")
+        self.assertGreater(stats["cleared"], 50)   # 160 域模板，绝大多数应被清空
+
+    def test_bodytext_rebuilt(self):
+        root, _ = self.tb.load_template(self.ZIPS[0], "入院记录")
+        xml, _ = self.tb.backfill(root, [{"label": "主诉", "value": "腹痛1天"}],
+                                  patient_facts={"name": "患者F"})
+        parts = xml.split("<BodyText>")
+        if len(parts) > 1:
+            body = parts[1].split("</BodyText>")[0]
+            self.assertNotIn(type(self)._TEMPLATE_PATIENT_NAME, body)   # 旧患者姓名不留在全文缓存
+
+    def test_records_submit_integration(self):
+        """归档提交链路：模板回填被触发，入库 xml 是完整 XTextDocument。"""
+        h = make_handler()
+        records.do_submit(h, {"code": "DA0006", "admission": 1, "doc": "入院记录",
+                              "disease": "阑尾炎", "fields": [
+                                  {"label": "主诉", "value": "腹痛1天"},
+                                  {"label": "患者姓名", "value": "患者F"}],
+                              "qc": {}, "edits": [], "xml": "<XTextDocument/>"}, RES)
+        self.assertEqual(h.response[0], 200)
+        rid = h.response[1]["id"]
+        conn = sqlite3.connect(auth._ACTIVE_SQLITE)
+        xml = conn.execute("SELECT xml_text FROM archives WHERE id=?", (rid,)).fetchone()[0] or ""
+        conn.close()
+        self.assertIn("XInputField", xml, "归档 xml 应为完整模板回填产物")
+        self.assertNotIn(type(self)._TEMPLATE_PATIENT_NAME, xml)
+
+
 if __name__ == "__main__":
     unittest.main()
