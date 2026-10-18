@@ -18,6 +18,14 @@ ASR MCP Server（语音识别模型上下文协议服务器）
   ASR_SENSE_API_BASE / ASR_SENSE_API_KEY
                           商汤（接口资料待商汤侧确认，当前为占位适配器）
   ASR_LOCAL_MODEL         本地模型路径或名称（faster-whisper，私有化研发用）
+  ASR_LOCAL_DEVICE        cpu/cuda（缺省 cpu）；ASR_LOCAL_COMPUTE 缺省按设备 int8/float16
+  ASR_LOCAL_BEAM          解码波束（缺省 5=引擎默认；患者F 单例 A/B：beam5 66.5% / beam1 70.2%，事实 12/12 vs 11/12）
+  ASR_FUNASR_MODEL        本地 FunASR 模型（缺省 iic/SenseVoiceSmall；可切 SeACo-Paraformer 热词模型）
+  ASR_FUNASR_DEVICE       FunASR 设备（cpu/cuda:0，缺省 cpu）
+  ASR_FUNASR_HOTWORD      热词串覆盖（缺省取医疗热词表正确词；仅上下文偏置模型生效）
+  ASR_FUNASR_CHUNK_S      超长段切分上限秒（缺省 SenseVoice 15 / Paraformer 系 10）
+  ASR_FUNASR_PUNC=0       关闭 Paraformer 标点模型（缺省开）
+  ASR_FUNASR_VAD=0        关闭 VAD 长音频切分（缺省开）
 
 工具：
   asr_engines()                              查看引擎清单与就绪状态
@@ -32,7 +40,7 @@ ASR MCP Server（语音识别模型上下文协议服务器）
     "mock": false, "warnings": ["…"]
   }
 """
-import os, re, sys, io, json, base64, hashlib, hmac, struct, time, urllib.parse
+import os, re, sys, io, json, base64, hashlib, hmac, struct, time, urllib.parse, importlib.util, contextlib
 from typing import Optional
 
 # ---------------- 音频预处理 ----------------
@@ -98,7 +106,7 @@ def wav_duration_sec(path):
                 if byte_rate: return round(size / byte_rate, 2)
                 return 0.0
             else:
-                f.seek(size + (size & 1))
+                f.seek(size + (size & 1), 1)  # 相对跳过块内容（缺 whence=1 会跳到绝对偏移，带 LIST 块的 WAV 全算错）
 
 # ---------------- 引擎适配层 ----------------
 class Transcript:
@@ -107,11 +115,14 @@ class Transcript:
         self.segments = segments
         self.mock, self.warnings = mock, warnings or []
         self.text_raw = text  # LLM 纠错前原文（双版本留痕；correct_hotwords 不改此字段）
+        self.hotwords_applied = []  # 热词修正清单（"错→对×N"），热词生长语料（harvest 用）
+        self.corrections = []       # LLM 方言纠错对 [{before,after}]，同上
     def to_dict(self):
         return {"engine": self.engine, "audio": self.audio,
                 "duration_sec": wav_duration_sec(self.audio) if self.audio.lower().endswith(".wav") else None,
                 "text": self.text, "text_raw": self.text_raw, "language": "zh",
-                "segments": self.segments, "mock": self.mock, "warnings": self.warnings}
+                "segments": self.segments, "mock": self.mock, "warnings": self.warnings,
+                "hotwords_applied": self.hotwords_applied, "corrections": self.corrections}
 
 # ---------------- 医疗热词后处理（PRD D4：同音听错纠正，保守短语规则） ----------------
 _HOTWORDS_CACHE = None
@@ -182,6 +193,23 @@ class BaseEngine:
     def status(self): raise NotImplementedError
     def transcribe(self, audio_path, speakers=True, **opts) -> Transcript:
         raise NotImplementedError
+
+# 转写质量守卫（引擎无关）：重复循环与繁体输出是 whisper 类模型在噪声/难例音频上的
+# 典型崩溃形态（门诊实测：嘈杂门诊音频上同句循环+繁体字，无提示词也复现）
+_TRAD_HINTS = "為麼這現來個沒對後語說樣時開關們過還聽講讓東區將與萬號體點從無發長門問題醫藥護檢結報"
+
+def quality_warnings(text):
+    import collections
+    warns = []
+    if len(text) >= 8:
+        grams = collections.Counter(text[i:i + 4] for i in range(len(text) - 4))
+        top = grams.most_common(1)[0][1] if grams else 0
+        if top >= 3:
+            warns.append(f"⚠ 疑似重复循环（4-gram 最高重复 {top} 次）——本段转写质量存疑，建议复听")
+    trad = sum(text.count(c) for c in _TRAD_HINTS)
+    if trad >= 3 and trad / max(len(text), 1) > 0.02:
+        warns.append("⚠ 疑似繁体输出（难例音频退化形态）——本段转写质量存疑，建议复听")
+    return warns
 
 class MockEngine(BaseEngine):
     """离线演示引擎：返回结构完整的模拟转写（角色分离），用于链路联调与 Demo，无任何外呼。"""
@@ -341,13 +369,20 @@ class SenseTimeEngine(BaseEngine):
         raise RuntimeError("商汤适配器未实现：接口资料确认后填充（契约见 BaseEngine）")
 
 class LocalWhisperEngine(BaseEngine):
-    """本地 faster-whisper（私有化研发基线：数据不出机，作为云端引擎的对照与兜底）。"""
+    """本地 faster-whisper（私有化研发基线：数据不出机，作为云端引擎的对照与兜底）。
+    档位与环境变量：ASR_LOCAL_MODEL（small/medium/large-v3-turbo/模型路径）、
+    ASR_LOCAL_DEVICE（cpu/cuda，缺省 cpu）、ASR_LOCAL_COMPUTE（缺省按设备取 int8/float16）、
+    ASR_LOCAL_BEAM（缺省 5=引擎默认；患者F 单例 A/B 实测 beam5 优于 beam1，且旧报告
+    "贪心最优"的说法与代码实际（未显式传参=beam5）不符，以复测为准）。"""
     name = "local-whisper"
     def configured(self): return bool(os.environ.get("ASR_LOCAL_MODEL"))
     def status(self):
         return {"ready": self.configured(),
-                "note": "faster-whisper 本地转写：无外呼、适合研发期与私有化对照；不带医生/患者角色分离（后处理区分）",
-                "env": ["ASR_LOCAL_MODEL"], "deps": "pip install faster-whisper"}
+                "note": f"faster-whisper 本地转写（{os.environ.get('ASR_LOCAL_MODEL') or '未配置模型'}/"
+                        f"{os.environ.get('ASR_LOCAL_DEVICE', 'cpu')}）：无外呼、适合研发期与私有化对照；"
+                        f"波束缺省 5（ASR_LOCAL_BEAM 可调）；不带医生/患者角色分离（后处理区分）",
+                "env": ["ASR_LOCAL_MODEL", "ASR_LOCAL_DEVICE", "ASR_LOCAL_COMPUTE", "ASR_LOCAL_BEAM"],
+                "deps": "pip install faster-whisper"}
     @staticmethod
     def _wav_to_float32(path):
         """16kHz 单声道 PCM WAV 直读为 float32（标准库 wave，免 PyAV/ffmpeg）。
@@ -377,21 +412,195 @@ class LocalWhisperEngine(BaseEngine):
             from faster_whisper import WhisperModel
         except ImportError:
             raise RuntimeError("缺少依赖：pip install faster-whisper")
-        model = WhisperModel(os.environ["ASR_LOCAL_MODEL"], device="cpu", compute_type="int8")
+        model_name = os.environ["ASR_LOCAL_MODEL"]
+        device = os.environ.get("ASR_LOCAL_DEVICE", "cpu")
+        compute = os.environ.get("ASR_LOCAL_COMPUTE", "int8" if device == "cpu" else "float16")
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute)
+        except Exception:
+            # 模型已缓存但 HF 网络抖动（实测 MaxRetryError）→ 离线加载重试；
+            # 国内网络可另设 HF_ENDPOINT=https://hf-mirror.com 走镜像
+            model = WhisperModel(model_name, device=device, compute_type=compute,
+                                 local_files_only=True)
         # WAV 直读优先（解除 PyAV metadata_errors 不兼容与 ffmpeg 依赖）；其他格式回退 PyAV
         pcm, rate = self._wav_to_float32(audio_path)
         kw = dict(language="zh", vad_filter=True,
                   initial_prompt=_medical_prompt(),
+                  beam_size=int(os.environ.get("ASR_LOCAL_BEAM", "5")),
                   # 真实方言录音实测（患者F）：条件于上文会诱发重复循环（同句×7），关闭后消除
                   condition_on_previous_text=False)
         src = pcm if pcm is not None else audio_path
         seg_iter, info = model.transcribe(src, **kw)
         segs = [{"start": round(s.start, 2), "end": round(s.end, 2), "speaker": "未分离" if speakers else "-", "text": s.text.strip()}
                 for s in seg_iter]
-        return Transcript("local-whisper", audio_path, "".join(s["text"] for s in segs), segs,
-                          warnings=["本地模型对山东方言准确率待评测；角色分离需后处理"])
+        text = "".join(s["text"] for s in segs)
+        return Transcript("local-whisper", audio_path, text, segs,
+                          warnings=["本地模型对山东方言准确率待评测；角色分离需后处理"] + quality_warnings(text))
 
-ENGINES = {e.name: e for e in (MockEngine(), XfyunEngine(), AliyunEngine(), SenseTimeEngine(), LocalWhisperEngine())}
+# ---------------- 本地 FunASR（自建/私有化：达摩院开源，方言与医疗热词增强） ----------------
+_FUNASR_DEFAULT_MODEL = "iic/SenseVoiceSmall"
+_FUNASR_MODELS = {}  # (model_id|"fsmn-vad", device) -> AutoModel：长驻进程内复用，避免每请求重载
+
+def _funasr_hotwords():
+    """热词串：ASR_FUNASR_HOTWORD 显式指定优先；否则取医疗热词表正确词。
+    解码期上下文偏置与 correct_hotwords 事后替换互补——偏置修"听不见音"（声学层），
+    替换修"听得见但写错字"（文本层）；仅 SeACo/contextual 系模型支持 hotword。"""
+    explicit = os.environ.get("ASR_FUNASR_HOTWORD")
+    if explicit is not None:
+        return explicit.strip()
+    return " ".join(sorted(set(_load_hotwords().values())))
+
+@contextlib.contextmanager
+def _quiet_stdout():
+    """funasr 在 import 与推理时向 stdout 打版本号/进度（实测 "funasr version: 1.4.16."
+    直接污染 MCP stdio 协议流，客户端会把它当 JSON 响应读），统一重定向到 stderr。"""
+    with contextlib.redirect_stdout(sys.stderr):
+        yield
+
+class FunASREngine(BaseEngine):
+    """本地 FunASR（阿里达摩院开源，数据不出机）——自建 ASR 主力：
+
+    - 默认 iic/SenseVoiceSmall：非自回归、CPU 可跑，中文口音鲁棒性优于 whisper-small；
+    - 可切 SeACo-Paraformer（ASR_FUNASR_MODEL 指向含 seaco/contextual 的模型）：
+      医疗热词在解码期做上下文偏置，直接提升"消炎针/阑尾炎"类术语的听音正确率；
+    - 分段策略（患者F 首例实测教训）：VAD 会把无长停顿的长对话并成 50s+ 一段，
+      而本族模型在 >15~20s 长段上显著退化（SeACo 丢内容、SenseVoice 压缩掉字），
+      故对超长段按能量最低点二次切分（ASR_FUNASR_CHUNK_S，缺省 SenseVoice 15s /
+      Paraformer 系 10s），逐段转写并保留 VAD 时间戳进统一 Transcript；
+    - Paraformer 系默认带标点（ct-punc，ASR_FUNASR_PUNC=0 可关）。
+    模型经 ModelScope 缓存后离线可用；依赖：pip install funasr torch torchaudio。"""
+    name = "funasr"
+    def configured(self):
+        try:
+            return importlib.util.find_spec("funasr") is not None
+        except (ImportError, ValueError):
+            return False
+    def status(self):
+        model_id = os.environ.get("ASR_FUNASR_MODEL") or _FUNASR_DEFAULT_MODEL
+        return {"ready": self.configured(),
+                "note": f"本地 FunASR（{model_id}，{os.environ.get('ASR_FUNASR_DEVICE', 'cpu')}）："
+                        "无外呼；VAD 分段+超长段能量切分；SeACo 系模型支持医疗热词解码期偏置",
+                "env": ["ASR_FUNASR_MODEL", "ASR_FUNASR_DEVICE", "ASR_FUNASR_HOTWORD",
+                        "ASR_FUNASR_CHUNK_S", "ASR_FUNASR_PUNC", "ASR_FUNASR_VAD"],
+                "deps": "pip install funasr torch torchaudio"}
+    @staticmethod
+    def _clean(text):
+        """清除富文本标签与表情符号（SenseVoice 情绪/事件标记非医疗内容），
+        并清 CJK 字符间空格（FunASR 部分模型逐字间插空格；不动中英/数字边界）。"""
+        t = re.sub(r"<\|[^|]*\|>", "", text)
+        t = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]", "", t)
+        return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", t).strip()
+    def _build(self, model_id, device, vad=False):
+        key = ("fsmn-vad", device) if vad else (model_id, device)
+        if key not in _FUNASR_MODELS:
+            with _quiet_stdout():  # funasr import 会往 stdout 打版本号，必须挡在协议流之外
+                from funasr import AutoModel
+                if vad:
+                    _FUNASR_MODELS[key] = AutoModel(model="fsmn-vad", device=device, disable_update=True)
+                else:
+                    kw = {"model": model_id, "device": device, "disable_update": True}
+                    if "sensevoice" not in model_id.lower() and os.environ.get("ASR_FUNASR_PUNC", "1") != "0":
+                        kw["punc_model"] = "ct-punc"
+                    _FUNASR_MODELS[key] = AutoModel(**kw)
+        return _FUNASR_MODELS[key]
+    @staticmethod
+    def _split_long(pcm, seg, limit_ms):
+        """超长段按能量最低点切分：在均匀切点 ±1.2s 内找 100ms 窗 RMS 最低处，
+        避免在词中间硬切（VAD 无静音点时的兜底；患者F 实测 VAD 会把 55.9s 并成一段）。"""
+        import numpy as np
+        s, e = seg
+        if e - s <= limit_ms:
+            return [(s, e)]
+        k = (e - s + limit_ms - 1) // limit_ms
+        cuts = []
+        for i in range(1, k):
+            tgt = s + (e - s) * i // k
+            lo, hi = max(s + 300, tgt - 1200), min(e - 300, tgt + 1200)
+            best, best_r = tgt, None
+            for c in range(lo, hi, 100):
+                a, b = c * 16, (c + 100) * 16
+                sub = pcm[a:b] if b <= len(pcm) else pcm[a:]
+                r = float(np.sqrt((sub.astype("float64") ** 2).mean())) if len(sub) else 0.0
+                if best_r is None or r < best_r:
+                    best_r, best = r, c + 50
+            cuts.append(best)
+        pts = [s] + sorted(cuts) + [e]
+        return [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+    def transcribe(self, audio_path, speakers=True, **opts):
+        if not self.configured():
+            raise RuntimeError("缺少依赖：pip install funasr torch torchaudio")
+        model_id = os.environ.get("ASR_FUNASR_MODEL") or _FUNASR_DEFAULT_MODEL
+        device = os.environ.get("ASR_FUNASR_DEVICE", "cpu")
+        lower = model_id.lower()
+        is_sv = "sensevoice" in lower
+        contextual = "seaco" in lower or "contextual" in lower
+        wav = prepare_audio(audio_path)
+        pcm, _ = LocalWhisperEngine._wav_to_float32(wav)
+        if pcm is None:
+            raise RuntimeError("FunASR 需要 16kHz 单声道 PCM WAV（prepare_audio 后仍不可读）")
+        warns = []
+        segs_ms = []
+        if os.environ.get("ASR_FUNASR_VAD", "1") != "0":
+            try:
+                with _quiet_stdout():
+                    rv = self._build(model_id, device, vad=True).generate(input=wav)
+                segs_ms = (rv[0].get("value") or []) if rv else []
+            except Exception as e:
+                warns.append(f"VAD 切分失败，整段兜底：{str(e)[:80]}")
+        if not segs_ms:
+            segs_ms = [[0, len(pcm) // 16]]
+        limit = int(float(os.environ.get("ASR_FUNASR_CHUNK_S", "15" if is_sv else "10")) * 1000)
+        # 分段：超长段能量切分 + 相邻短段合并（合计 ≤limit 且间隔 ≤800ms）——减少调用次数
+        chunks = []
+        for s, e in [c for seg in segs_ms for c in self._split_long(pcm, seg, limit)]:
+            if chunks and (e - chunks[-1][0]) <= limit and (s - chunks[-1][1]) <= 800:
+                chunks[-1] = (chunks[-1][0], e)
+            else:
+                chunks.append((s, e))
+        chunks = [(s, e) for s, e in chunks if e - s >= 100]  # <0.1s 碎片丢弃
+        if not chunks:
+            raise RuntimeError("FunASR 转写结果为空（音频过短或无有效语音）")
+        audio_in = [pcm[int(s * 16):int(e * 16)] for s, e in chunks]
+        hot = _funasr_hotwords() if contextual else ""
+        if contextual and hot:
+            warns.append(f"解码期热词偏置已启用（{len(hot.split())} 词）")
+        model = self._build(model_id, device)
+
+        def _cfg(inp, n):
+            gen = {"input": inp, "batch_size_s": 60}
+            if n > 1:
+                gen["batch_size"] = n
+            if is_sv:
+                gen.update(language="zh", use_itn=True)
+            elif hot:
+                gen["hotword"] = hot
+            return gen
+
+        try:
+            with _quiet_stdout():
+                results = model.generate(**_cfg(audio_in, len(audio_in)))
+        except Exception as e:
+            # 批量失败（单段异常会拖垮整批）→ 逐段降级重试，保住可用性
+            warns.append(f"批量转写失败，逐段降级：{str(e)[:80]}")
+            results = []
+            for one in audio_in:
+                with _quiet_stdout():
+                    results.append(model.generate(**_cfg(one, 1))[0])
+        out = []
+        for (s_ms, e_ms), r in zip(chunks, results):
+            t = self._clean(str((r or {}).get("text") or ""))
+            if not t:
+                continue
+            out.append({"start": round(s_ms / 1000.0, 2), "end": round(e_ms / 1000.0, 2),
+                        "speaker": "未分离" if speakers else "-", "text": t})
+        if not out:
+            raise RuntimeError("FunASR 转写结果为空（音频过短或无有效语音）")
+        warns.append("角色分离由后处理标注（本地引擎不含医生/患者分离）")
+        text = "".join(s["text"] for s in out)
+        return Transcript("funasr", audio_path, text, out, warnings=warns + quality_warnings(text))
+
+ENGINES = {e.name: e for e in (MockEngine(), XfyunEngine(), AliyunEngine(), SenseTimeEngine(),
+                               LocalWhisperEngine(), FunASREngine())}
 
 def pick_engine(name: Optional[str]) -> BaseEngine:
     name = name or os.environ.get("ASR_DEFAULT_ENGINE") or "mock"
@@ -405,7 +614,8 @@ def postprocess(transcript, correct=True, llm_polish=False):
     所有引擎（含云端）的转写结果都应过此管线再进抽取/生成——修正清单与原文随 Transcript
     下发，四色确认页可溯源到转写原话（绿字段红线：修正不改写语义）。"""
     if correct:
-        transcript, _ = correct_hotwords(transcript)
+        transcript, applied = correct_hotwords(transcript)
+        transcript.hotwords_applied = applied  # 热词命中清单（随 to_dict 下发，供 harvest 沉淀）
     if llm_polish and os.environ.get("LLM_API_BASE") and transcript.text:
         try:
             transcript = dialect_polish(transcript)
@@ -463,7 +673,7 @@ TOOLS = [
     {"name": "asr_prepare_audio", "description": "音频预处理：转 16kHz 单声道 WAV（各引擎通用前置）",
      "inputSchema": {"type": "object", "properties": {
          "audio_path": {"type": "string"}, "out_dir": {"type": "string"}}, "required": ["audio_path"]}},
-    {"name": "asr_transcribe", "description": "语音转写：返回统一 Transcript（全文 + text_raw 原文 + 分段 + 说话人）。engine 可选 mock/xfyun/aliyun/sensetime/local-whisper，缺省取 ASR_DEFAULT_ENGINE。correct=热词修正（默认开）；llm_polish=LLM 方言纠错级联（默认关，原文以 text_raw 留痕）",
+    {"name": "asr_transcribe", "description": "语音转写：返回统一 Transcript（全文 + text_raw 原文 + 分段 + 说话人）。engine 可选 " + "/".join(ENGINES) + "，缺省取 ASR_DEFAULT_ENGINE。correct=热词修正（默认开）；llm_polish=LLM 方言纠错级联（默认关，原文以 text_raw 留痕）",
      "inputSchema": {"type": "object", "properties": {
          "audio_path": {"type": "string", "description": "音频文件路径（m4a/wav/mp3 等，自动预处理）"},
          "engine": {"type": "string"}, "speakers": {"type": "boolean", "default": True},

@@ -13,8 +13,9 @@
 | `demo/` | 医生端网页工作台 Demo：工作台任务视角 → 问诊录音（真实引擎就绪即切真实模式）→ **真实六智能体流水线生成**（流式展示）→ 四色确认 → 真库归档 → **上级医师审签 / 质控科抽查**；含打印/存 PDF、台账 CSV 导出、脱敏演示数据与字段地图；**交互流程已平台化（数据驱动）**——患者F 为首例真实录音案例（真实方言问诊录音→本地转写→接入），新案例经传送带接入后前端零改动 | 可运行 |
 | `server/` | **P1 多智能体核心**：六智能体 + orchestrator（DAG+trace）；LLM API（流式 NDJSON）；**认证服务 auth.py**（三角色，生产 MySQL / 研发 SQLite 降级，PBKDF2 200k 轮）+ **归档审签 records.py**（真库归档/审签状态机/质控抽查/修改回流聚合）+ **单元测试 54 项**（tests/） | 已上线 |
 | `evaluation/` | 金标准反推评测框架 + 三类文书基线报告 + **一键回归自动化**（run_regression.py，md+json 双格式落盘、与上期 diff）；HIS 视图 **8 表全量加载**（医嘱/检验结果已接入生成端）；ASR 方言测试集标注脚手架 | 回归已自动化 |
-| `mcp-server/` | ASR MCP 服务器：统一语音识别接口，讯飞/阿里云/商汤/本地 Whisper 可插拔引擎；**录音页真实链路已打通**（/asr/status 探测 + /asr/transcribe 转写，密钥后补即用，演示回放保留为降级）；本地引擎经**首例真实方言录音实测升级**（短领域提示 + 防重复循环参数 + 热词变体族） | 前置就绪，等密钥 |
-| `tools/` | 运维与接入工具：**case_ingest.py 真实案例接入传送带**（HIS 8 表 + 录音转写稿 → 脱敏演示数据，红线扫描强制）、asr_ingest.py 录音落位/批量转写、check_repo.py 一键仓库体检、make_rehearsal_audio.py 彩排音频合成 | 可用 |
+| `mcp-server/` | ASR MCP 服务器：统一语音识别接口，讯飞/阿里云/商汤/**本地自建（FunASR / faster-whisper）**可插拔引擎；**录音页真实链路已打通**（/asr/status 探测 + /asr/transcribe 转写，密钥后补即用，演示回放保留为降级）；**自建引擎落地**：FunASR（SenseVoice/SeACo 热词偏置）零外呼可跑，分段策略经首例真实方言录音实测修正（VAD+超长段能量切分）；热词变体族持续生长 | 自建引擎可用，等云端密钥 |
+| `tools/` | 运维与接入工具：**case_ingest.py 真实案例接入传送带**（HIS 8 表 + 录音转写稿 → 脱敏演示数据，红线扫描强制）、asr_ingest.py 录音落位/批量转写、**asr_corpus.py 方言 ASR 语料库**（引擎对比/标注草稿/门槛进度，数据飞轮）、**asr_reconcile.py 双引擎交叉校订稿**（分歧点听辨清单，标注加速）、**hotword_harvest.py 热词表自动生长**（纠错对沉淀→候选清单→审核合并）、check_repo.py 一键仓库体检、make_rehearsal_audio.py 彩排音频合成 | 可用 |
+| `deploy/` | 部署编排：云服务器版（docker-compose.server.yml/update/backup）+ **私有化交付套件 `deploy/offline/`**（make_delivery.sh 一键打包、install.sh 院内一键安装、verify.sh 验收自检；详见 docs/私有化交付/） | 可用 |
 
 ## 快速开始
 
@@ -55,6 +56,13 @@ python3 tools/check_repo.py
 python3 tools/asr_ingest.py 病历资料/录音 --validate      # 落位校验：格式/命名 → 落位报告.md（无需密钥）
 python3 tools/asr_ingest.py 病历资料/录音 --transcribe    # 批量转写（需 .llm_env 中 ASR_* 密钥）
 
+# 自建 ASR 语料库（数据飞轮第②阶段：引擎对比 + 标注草稿 + 门槛进度；详见 docs/自建ASR选型与实施路径.md）
+python3 tools/asr_corpus.py --add 病历资料/住院/<姓名> --whisper-model small --llm-polish  # 有参照稿→完整评测并归集
+python3 tools/asr_corpus.py --add 病历资料/门诊/1.m4a --llm-polish                        # 无参照稿→落引擎草稿待标注
+python3 tools/asr_corpus.py --stats   # 累计：案例数/音频小时数/各引擎均值/复选 5 例与微调 50h 门槛进度
+python3 tools/asr_reconcile.py 病历资料/门诊/1.m4a --whisper-model small   # 双引擎交叉校订稿：只列分歧点，标注从"逐字听写"变"分歧仲裁"
+python3 tools/hotword_harvest.py --scan 病历资料   # 热词表自动生长：纠错对沉淀→候选清单（审核后 --merge 合并）
+
 # 评测趋势汇总（P2-M）：历次回归报告 → 覆盖率/准确率跨期对照表（双周汇报用）
 python3 evaluation/trend_report.py
 
@@ -81,6 +89,12 @@ python3 tools/make_transcript_md.py "病历资料/住院/<姓名>" --code DA00NN
 # 01_录音知情同意书模板_v0.1.md（含录音技术规范，待医务科审定）
 # 02_HIS对接需求函_v0.1.md（两步走方案 + 资料清单，转信息科/EMR 厂商）
 # 03_字段地图v0_确认表.xlsx（238 字段×四色预建议×院方勾选列；生成器 tools/gen_fieldmap_xlsx.py）
+
+# 私有化交付包（三甲规格：Docker 内网部署 + B/S 访问，docs/私有化交付/01_说明书）
+bash deploy/offline/make_delivery.sh v1.0              # 一键打包（联调用 --skip-images）
+# 产物 dist/mra-delivery-v1.0.tar.gz：离线镜像 + install.sh 院内一键安装
+# + verify.sh 验收自检 + 红线扫描（患者数据/密钥零进入）+ SHA256SUMS 全包校验
+# 院内安装：sudo bash install.sh [--with-mysql]；验收：bash verify.sh --deployed
 ```
 
 ## 核心设计（详见 PRD）

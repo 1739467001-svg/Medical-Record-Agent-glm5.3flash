@@ -13,13 +13,15 @@
 参照稿：人工校读理解稿（纯文本，每轮一句），存案例目录；引擎结果先过统一后处理
 （热词修正；--llm-polish 时加 LLM 方言纠错）再评测——与生产链路完全同构。
 """
-import argparse, importlib.util, os, sys
+import argparse, importlib.util, json, os, re, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "mcp-server"))
 import asr_mcp_server as mcp  # noqa: E402
 
-# 患者F 校准的 12 项关键医学事实（评测口径与 docs/ASR识别质量评测_患者F.md 一致）
+# 关键医学事实清单：缺省用患者F 校准的 12 项（与 docs/ASR识别质量评测_患者F.md 一致）；
+# 其他案例用 --facts <json> 或参照稿同目录 事实清单.json 覆盖（[["名称",["关键词",…]],…]
+# 或 {"名称":["关键词"]}）——多案例语料库必须逐案提供，否则事实列无意义。
 FACTS = [
     ("起病=昨天下午", ("昨天下午", "昨天")),
     ("院外消炎针", ("消炎针", "消炎药")),
@@ -36,9 +38,25 @@ FACTS = [
 ]
 
 
+def load_facts(path):
+    data = json.load(open(path, encoding="utf-8"))
+    if isinstance(data, dict):
+        return [(k, tuple(v)) for k, v in data.items() if not str(k).startswith("_")]
+    return [(str(n), tuple(ks)) for n, ks in data]
+
+
 def clean(s):
     import re
     return re.sub(r"[，。？！、\s,.?!——；;：:]", "", s)
+
+
+# 语气词（净CER 口径：双侧同去——患者F 实测教训：SenseVoice 如实转写语气词，
+# 字数近参照稿两倍，标准 CER 把"忠实"误判为"错误"；清理型转写则天然占便宜）
+FILLER_RE = re.compile(r"[嗯哦呃啊哎唉呀哈嘛吧呢噢]")
+
+
+def clean_net(s):
+    return FILLER_RE.sub("", clean(s))
 
 
 def lev(a, b):
@@ -52,10 +70,13 @@ def lev(a, b):
 
 
 def eval_text(hyp, ref):
+    """返回 {cer, net_cer, chars, hits, total}：cer=标准口径；net_cer=去语气词口径。"""
     H, R = clean(hyp), clean(ref)
     cer = lev(R, H) / len(R) if R else 0.0
+    Hn, Rn = FILLER_RE.sub("", H), FILLER_RE.sub("", R)
+    net = lev(Rn, Hn) / len(Rn) if Rn else 0.0
     hits = sum(1 for _, keys in FACTS if any(k in hyp for k in keys))
-    return cer, hits, len(FACTS)
+    return {"cer": cer, "net_cer": net, "chars": len(H), "hits": hits, "total": len(FACTS)}
 
 
 def main():
@@ -65,6 +86,7 @@ def main():
     ap.add_argument("--engines", default="local-whisper", help="逗号分隔引擎名")
     ap.add_argument("--llm-polish", action="store_true", help="评测 LLM 方言纠错级联效果")
     ap.add_argument("--out", default="", help="报告输出路径（缺省打印 stdout）")
+    ap.add_argument("--facts", default="", help="事实清单 JSON（缺省：参照稿同目录 事实清单.json；再缺省用患者F 12 项）")
     a = ap.parse_args()
 
     # 加载 LLM 环境（evaluation/.llm_env，--llm-polish 需要）
@@ -78,34 +100,52 @@ def main():
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k, v.strip('"').strip("'"))
 
+    # 事实清单：显式 --facts 优先；否则找参照稿同目录 事实清单.json；再否则用内置患者F 12 项
+    global FACTS
+    facts_path = a.facts or os.path.join(os.path.dirname(os.path.abspath(a.ref)), "事实清单.json")
+    if a.facts and not os.path.exists(a.facts):
+        raise SystemExit(f"事实清单不存在：{a.facts}")
+    if os.path.exists(facts_path):
+        FACTS = load_facts(facts_path)
+        print(f"（事实清单：{facts_path}，{len(FACTS)} 项）")
+
     ref = open(a.ref, encoding="utf-8").read()
-    rows = []
+    rows, details = [], []
     for name in [e.strip() for e in a.engines.split(",") if e.strip()]:
         try:
             t = mcp.pick_engine(name).transcribe(a.audio, speakers=True)
             t = mcp.postprocess(t, correct=True, llm_polish=a.llm_polish)
             d = t.to_dict()
-            cer, hits, total = eval_text(d["text"], ref)
-            rows.append((name, d["engine"], cer, hits, total, len(d.get("segments") or []), None))
+            m = eval_text(d["text"], ref)
+            nseg = len(d.get("segments") or [])
+            rows.append((name, m["cer"], m["net_cer"], m["chars"], m["hits"], m["total"], nseg, None))
+            details.append({"engine": name, **m, "n_segments": nseg, "text": d["text"],
+                            "text_raw": d.get("text_raw"), "warnings": d.get("warnings"),
+                            "hotwords_applied": d.get("hotwords_applied"),
+                            "corrections": d.get("corrections")})
             if d.get("text_raw") and d["text_raw"] != d["text"]:
-                cer0, hits0, _, _, _ = (*eval_text(d["text_raw"], ref), 0, 0)
-                rows.append((name + "·raw(纠错前)", d["engine"], cer0, hits0, total,
-                             len(d.get("segments") or []), "原转写（LLM 纠错前基线）"))
+                m0 = eval_text(d["text_raw"], ref)
+                rows.append((name + "·raw(纠错前)", m0["cer"], m0["net_cer"], m0["chars"],
+                             m0["hits"], m0["total"], nseg, "原转写（热词/LLM 纠错前基线）"))
+                details.append({"engine": name + "·raw(纠错前)", **m0, "text": d["text_raw"],
+                                "warnings": ["纠错前原转写"]})
         except Exception as e:
-            rows.append((name, "-", None, 0, len(FACTS), 0, str(e)[:120]))
+            rows.append((name, None, None, 0, 0, len(FACTS), 0, str(e)[:120]))
 
     lines = ["# ASR 引擎对比评测", "",
              f"- 音频：`{a.audio}`　参照：`{a.ref}`（{len(clean(ref))} 字）　LLM 纠错：{'开' if a.llm_polish else '关'}",
-             "- 口径：CER=编辑距离/参照字数（去标点）；事实保留=12 项关键医学事实字面命中数",
-             f"- 基线（2026-10-14 患者F）：local-whisper small 热词修正后 CER 65.1%、事实 12/12", "",
-             "| 引擎 | CER | 事实保留 | 分段 | 备注 |", "|---|---|---|---|---|"]
-    for disp, eng, cer, hits, total, nseg, note in rows:
-        cer_s = f"{cer*100:.1f}%" if cer is not None else "—"
-        lines.append(f"| {disp} | {cer_s} | {hits}/{total} | {nseg} | {note or ''} |")
+             f"- 口径：CER=编辑距离/参照字数（去标点）；净CER=双侧再同去语气词（忠实转写不吃亏）；事实保留={len(FACTS)} 项关键医学事实字面命中数",
+             "- 基线（2026-10-14 患者F）：local-whisper small 热词修正后 CER 65.1%、事实 12/12", "",
+             "| 引擎 | CER | 净CER | 转写字数 | 事实保留 | 分段 | 备注 |", "|---|---|---|---|---|---|---|"]
+    for disp, cer, net, chars, hits, total, nseg, note in rows:
+        f2 = lambda v: f"{v*100:.1f}%" if v is not None else "—"
+        lines.append(f"| {disp} | {f2(cer)} | {f2(net)} | {chars} | {hits}/{total} | {nseg} | {note or ''} |")
     out = "\n".join(lines) + "\n"
     if a.out:
         open(a.out, "w", encoding="utf-8").write(out)
-        print(f"✓ 报告已写入 {a.out}")
+        open(a.out + ".json", "w", encoding="utf-8").write(
+            json.dumps(details, ensure_ascii=False, indent=1))
+        print(f"✓ 报告已写入 {a.out}（明细含全文 → {a.out}.json，案例目录 git 忽略）")
     print(out)
 
 

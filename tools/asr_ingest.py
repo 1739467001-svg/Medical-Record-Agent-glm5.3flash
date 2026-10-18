@@ -179,7 +179,7 @@ def main():
     ap.add_argument("dir", help="录音目录（须被 .gitignore 忽略，如 病历资料/录音）")
     ap.add_argument("--validate", action="store_true", help="落位校验（默认动作，无需密钥）")
     ap.add_argument("--transcribe", action="store_true", help="批量转写达标的 WAV（需 ASR_* 密钥）")
-    ap.add_argument("--engine", default="default", help="引擎：default/xfyun/aliyun/sensetime/local-whisper")
+    ap.add_argument("--engine", default="default", help="引擎：default/xfyun/aliyun/sensetime/local-whisper/funasr")
     args = ap.parse_args()
     audio_dir = ensure_ignored(args.dir)
     if args.transcribe:
