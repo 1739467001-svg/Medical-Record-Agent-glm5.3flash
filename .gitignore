@@ -24,5 +24,11 @@ tmp/
 evaluation/.llm_env
 server/local_dev*.db
 
+# 私有化交付包产物（deploy/offline/make_delivery.sh 输出，按需重打包，不入库）
+dist/
+
 # GUI 测试临时产物（根目录批量截图不入库；关键证据挑选后放 demo/gui-test-screenshots/）
 /gui-test-screenshots/
+
+# 热词表合并备份（hotword_harvest.py --merge 自动生成）
+*.bak-*

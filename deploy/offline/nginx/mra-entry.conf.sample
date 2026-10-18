@@ -1,0 +1,46 @@
+# ============================================================
+# 院内入口反代样例 · 提供给信息科（院内 nginx 的 server 段）
+# 前提：宿主端口默认 3904（静态）/ 3905（API），可在 .llm_env 调整
+# 前端全部使用相对路径（api/…），任何子路径反代均兼容，无需改代码
+#
+# HTTPS（推荐）：浏览器仅在安全上下文授予麦克风权限（说明书 §2.4）
+#   1) 院内 DNS 建别名 mra.hospital.local → 服务器内网 IP
+#   2) 院内 CA 签发证书（或自签后导入工作站信任）
+#   3) 启用下方 443 段并替换证书路径
+# ============================================================
+
+# ---------- 过渡期：HTTP ----------
+server {
+    listen 80;
+    server_name mra.hospital.local;      # 或直接写服务器内网 IP
+
+    # 医生工作台静态站
+    location /mra/ {
+        proxy_pass http://127.0.0.1:3904/;      # 尾部斜杠：剥除 /mra/ 前缀
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # API（/mra/api/ 前缀由尾部斜杠剥除；后端直接路由 /auth/* /records/* 等）
+    location /mra/api/ {
+        proxy_pass http://127.0.0.1:3905/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        client_max_body_size 50m;       # 录音 base64 上传（上限 30MB 音频）
+        proxy_read_timeout 300s;        # 长录音转写与 LLM 流式生成
+        proxy_buffering off;            # 流式 NDJSON 即时下发
+    }
+}
+
+# ---------- 推荐：HTTPS（启用时删掉上方 80 段或做 301 跳转） ----------
+# server {
+#     listen 443 ssl;
+#     server_name mra.hospital.local;
+#     ssl_certificate     /etc/nginx/ssl/mra.crt;    # 院内 CA 签发
+#     ssl_certificate_key /etc/nginx/ssl/mra.key;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#
+#     location /mra/      { proxy_pass http://127.0.0.1:3904/; proxy_set_header Host $host; }
+#     location /mra/api/  { proxy_pass http://127.0.0.1:3905/; proxy_set_header Host $host;
+#                           client_max_body_size 50m; proxy_read_timeout 300s; proxy_buffering off; }
+# }

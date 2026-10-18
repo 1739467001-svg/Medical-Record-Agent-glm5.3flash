@@ -1,0 +1,54 @@
+# ============================================================
+# .llm_env · 私有化部署配置模板
+# 用法：复制为 $APP_DIR/.llm_env 并填写（install.sh 会自动完成并校验）
+# 权限：chmod 600 .llm_env —— 该文件永不入 Git、永不随备份外发
+# 格式：KEY=VALUE；含空格/特殊字符的值请用单引号包裹，如 'p@ss word!'
+# 字段说明详见 docs/私有化交付/01_私有化部署交付说明书_v1.0.md §5.3 与 §6（方案A/B）
+# ============================================================
+
+# ── 入口端口（compose 宿主映射；与其他院内系统端口冲突时修改）──
+MRA_STATIC_PORT=3904
+MRA_API_PORT=3905
+
+# ── LLM 生成服务 ────────────────────────────────────────────
+# 方案A（云端 API）：防火墙需放行 LLM_API_BASE 域名（HTTPS 443）
+# 方案B（全本地零外呼）：LLM_API_BASE 指向院内 vLLM 等 OpenAI 兼容服务
+LLM_API_BASE=https://api.deepseek.com/v1
+LLM_API_KEY=<填写密钥>
+LLM_MODEL=Deepseek-v4-flash
+
+# ── 数据库 MySQL（生产必须；未配置时自动降级 SQLite，仅研发用）──
+# 使用交付包容器化 MySQL（install.sh --with-mysql）：HOST 填 mra-mysql
+# 对接院内已有实例（宿主机部署）：HOST 填 host.docker.internal
+# 对接院内独立数据库服务器：HOST 填该服务器内网地址，并放行 3306
+MRA_MYSQL_HOST=host.docker.internal
+MRA_MYSQL_PORT=3306
+MRA_MYSQL_USER=mra
+MRA_MYSQL_PASSWORD=<填写强密码>
+MRA_MYSQL_DB=medical_record_agent
+
+# ── 容器化 MySQL 专属（仅 install.sh --with-mysql 启用时生效）──
+MYSQL_ROOT_PASSWORD=<填写root强密码>
+
+# ── 语音识别引擎（按选定方案启用其一，见说明书 §6）──────────
+# 当前值 mock = 演示回放模式（录音步骤回放样例转写，不调真实引擎）
+ASR_DEFAULT_ENGINE=mock
+# ① 讯飞 RTASR（方案A：云端，方言热词最优；需防火墙放行 rtasr.xfyun.cn）
+# ASR_XFYUN_APP_ID=<appid>
+# ASR_XFYUN_API_KEY=<apikey>
+# ASR_XFYUN_HOTWORDS=<医疗热词，逗号分隔：科室/药品/术语>
+# ② 本地 faster-whisper（方案B：零外呼；模型目录随交付包 models/ 提供）
+# ASR_LOCAL_MODEL=/models/whisper-small
+# ASR_LOCAL_PROMPT=<领域提示，建议带科室常见诊断>
+# ③ 阿里云/商汤：环境变量见 mcp-server/README.md
+
+# ── 可选项（默认值适用大多数场景，按需取消注释）─────────────
+# LLM 生成限流（次/分/用户）
+# MRA_RATE_LIMIT=6
+# 认证接口限流（次/分/IP）
+# MRA_AUTH_RATE_LIMIT=20
+# 转写限流（次/分/用户）
+# MRA_ASR_RATE_LIMIT=3
+# API 容器资源限幅（本地 whisper 引擎建议 mem 4g / cpus 2.0）
+# MRA_API_MEM_LIMIT=512m
+# MRA_API_CPUS=1.0
