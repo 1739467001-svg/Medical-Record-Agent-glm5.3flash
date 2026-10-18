@@ -1,21 +1,29 @@
 # ============================================================
 # 私有化交付版 llm-api 镜像（乙方有网环境预构建；院内 docker load 导入）
-# 与生产云端同基镜像（python:3.12-alpine），叠加两点私有化增强：
+# 与生产云端同基镜像（python:3.12-slim, glibc），叠加两点私有化增强：
 #   ① ffmpeg：音频上传转码兜底（前端直录 16k WAV 不需要；
 #      医生上传 mp3/m4a 文件时必需）
-#   ② 可选 faster-whisper：--build-arg WITH_LOCAL_ASR=1（方案B 本地引擎；
-#      镜像体积 +约 1GB；whisper 模型文件不经镜像，随交付包 models/ 目录挂载）
-# 构建：
+#   ② 可选本地 ASR 栈：--build-arg WITH_LOCAL_ASR=1（方案B 本地引擎；
+#      faster-whisper + ctranslate2 与 funasr 全家桶，镜像体积 +约 2GB；
+#      模型文件不经镜像，随交付包 models/ 目录挂载）
+# 构建必须在 amd64 打包机上执行（院内服务器为 x86_64）：
 #   docker build -t mra/llm-api:<版本> -f deploy/offline/Dockerfile.llm-api .
 #   docker build -t mra/llm-api:<版本> -f deploy/offline/Dockerfile.llm-api \
 #     --build-arg WITH_LOCAL_ASR=1 .
 # 由 deploy/offline/make_delivery.sh 自动调用，一般无需手工执行
+#
+# 基座演进记录：v1 用 python:3.12-alpine（musl），实测 ctranslate2/torch
+# 均无 musllinux 轮子（PyPI 仅 manylinux/macosx/win），pip 装不上或源码
+# 编译失败 → 切 glibc 基座 python:3.12-slim（apt 装 ffmpeg），已实测构建通过
 # ============================================================
-ARG BASE=public.ecr.aws/docker/library/python:3.12-alpine
+ARG BASE=public.ecr.aws/docker/library/python:3.12-slim
 FROM ${BASE}
 ARG WITH_LOCAL_ASR=0
-RUN apk add --no-cache ffmpeg \
-    && if [ "$WITH_LOCAL_ASR" = "1" ]; then pip install --no-cache-dir faster-whisper; fi
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && if [ "$WITH_LOCAL_ASR" = "1" ]; then pip install --no-cache-dir \
+        faster-whisper funasr torch torchaudio modelscope; fi
 WORKDIR /app
 EXPOSE 8090
 # 代码与密钥全部经 compose 卷挂载进容器（./repo/server:/app:ro 等）；

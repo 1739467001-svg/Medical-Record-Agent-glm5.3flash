@@ -163,25 +163,74 @@ def _medical_prompt():
                      "消炎针、输液、手术、住院。")
     return _PROMPT_CACHE
 
+def _load_hotword_guards():
+    """加载高危短语白名单：medical_hotwords.json 的「高危短语白名单」键。
+    键=触发替换的短规则，值=保护短语数组——保护短语出现处该规则不替换（误伤防线）。"""
+    path = os.environ.get("MRA_MEDICAL_HOTWORDS") or \
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "medical_hotwords.json")
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+        raw = data.get("高危短语白名单") or {}
+        return {str(k): [str(p) for p in v] for k, v in raw.items() if v and not str(k).startswith("_")}
+    except Exception:
+        return {}
+
+
+def _replace_guarded(text, wrong, right, guards):
+    """带白名单的逐次替换：保护短语所在位置不动，其余出现处照常替换。
+    保护匹配在「这次命中前后各 6 字」的窗口里找——短规则的误伤对象（如"给你提个早下手术"）
+    保护短语未必以错词开头（"给你提个"），所以按窗口包含判断而非仅前缀。
+    返回 (新文本, 实际替换次数)。无保护规则的短词走原生 str.replace 快路径。"""
+    prots = guards.get(wrong)
+    if not prots:
+        n = text.count(wrong)
+        return (text.replace(wrong, right), n) if n else (text, 0)
+    out, i, n = [], 0, 0
+    L = len(text)
+    while i < L:
+        hit = next((p for p in prots if p.startswith(wrong) and text.startswith(p, i)), None)
+        if hit:  # 保护短语以错词开头：整段原样通过
+            out.append(hit)
+            i += len(hit)
+            continue
+        if text.startswith(wrong, i):
+            ctx_lo, ctx_hi = max(0, i - 6), min(L, i + len(wrong) + 6)
+            ctx = text[ctx_lo:ctx_hi]
+            if any(p in ctx for p in prots):  # 窗口内含保护短语：这次不动
+                out.append(text[i])
+                i += 1
+                continue
+            out.append(right)
+            n += 1
+            i += len(wrong)
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out), n
+
+
 def correct_hotwords(transcript):
     """对 Transcript 应用热词修正（全文+分段同步，warnings 留痕）。返回 (transcript, 修正清单)。
-    设计约束：只修 ASR 听错（同音字），不做规范用语改写——保持绿字段可溯源到医生实际说出的话。"""
+    设计约束：只修 ASR 听错（同音字），不做规范用语改写——保持绿字段可溯源到医生实际说出的话。
+    高危 2 字短规则走白名单防线（medical_hotwords.json「高危短语白名单」）：
+    实测教训——患者F"给你提个早下手术"被 提个→体格 误改，故保护短语处不替换。"""
     rules = _load_hotwords()
     if not rules:
         return transcript, []
+    guards = _load_hotword_guards()
     applied = []
     text = transcript.text
     for wrong, right in sorted(rules.items(), key=lambda kv: -len(kv[0])):
-        n = text.count(wrong)
+        text, n = _replace_guarded(text, wrong, right, guards)
         if n:
-            text = text.replace(wrong, right)
             applied.append(f"{wrong}→{right}×{n}")
     if applied:
         transcript.text = text
         for seg in transcript.segments:
             t = str(seg.get("text", ""))
             for wrong, right in sorted(rules.items(), key=lambda kv: -len(kv[0])):
-                t = t.replace(wrong, right)
+                t, _ = _replace_guarded(t, wrong, right, guards)
+            seg["text"] = t
             seg["text"] = t
         transcript.warnings = (transcript.warnings or []) + ["医疗热词修正：" + "；".join(applied)]
     return transcript, applied

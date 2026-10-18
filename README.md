@@ -39,9 +39,9 @@ python3 evaluation/run_regression.py
 # ASR MCP 服务器自测（mock 引擎，无需密钥）
 python3 mcp-server/test_client.py
 
-# 后端单元测试（零依赖 unittest，60 项：规范用语改写/无素材拦截/QC 回流/
+# 后端单元测试（零依赖 unittest，65 项：规范用语改写/无素材拦截/QC 回流/
 # 审签状态机/角色权限/修改回流聚合/老库迁移/登录防爆破/审计留痕/归档包导出/医疗热词/WAV直读/
-# 方言变体族热词/领域提示边界/案例接入传送带/时间穿越截断/XTextDocument 模板回填；
+# 方言变体族热词/热词白名单防线/领域提示边界/案例接入传送带/时间穿越截断/XTextDocument 模板回填；
 # 临时 SQLite，不触碰研发数据）
 cd server && python3 -m unittest discover -s tests
 
