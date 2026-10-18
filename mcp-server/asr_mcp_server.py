@@ -165,13 +165,16 @@ def _medical_prompt():
 
 def _load_hotword_guards():
     """加载高危短语白名单：medical_hotwords.json 的「高危短语白名单」键。
-    键=触发替换的短规则，值=保护短语数组——保护短语出现处该规则不替换（误伤防线）。"""
+    键=触发替换的短规则，值=保护短语数组——保护短语出现处该规则不替换（误伤防线）。
+    值为空数组表示「已人工审过、确认错词形并非常用词故无需保护」——保留该键是为了让
+    tools/hotword_audit.py 能区分"已审无保护"与"尚未审"，不再重复报警。"""
     path = os.environ.get("MRA_MEDICAL_HOTWORDS") or \
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "medical_hotwords.json")
     try:
         data = json.load(open(path, encoding="utf-8"))
         raw = data.get("高危短语白名单") or {}
-        return {str(k): [str(p) for p in v] for k, v in raw.items() if v and not str(k).startswith("_")}
+        return {str(k): [str(p) for p in (v or [])]
+                for k, v in raw.items() if not str(k).startswith("_")}
     except Exception:
         return {}
 
