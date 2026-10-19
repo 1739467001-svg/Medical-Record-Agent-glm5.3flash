@@ -203,6 +203,49 @@ def check_env():
     except Exception as e:
         report(6, "演示数据 patients.json 可解析", False, str(e))
 
+# ---------------- [7] GitHub 同步（三步制：改代码 → 更新开发日志 → 推 GitHub）----------------
+def check_github_sync():
+    """确认本地进度已同步到 GitHub。
+
+    三种情形区别对待：
+      · 不是 Git 仓库（如院内交付包——打包时刻意排除 .git）：本项**不适用**，如实说明并跳过；
+      · 是 Git 仓库但未配 origin（临时导出、离线环境）：只提示，不判失败；
+      · 配了 origin：则"本地领先未推送""工作区有未提交改动"都算**不通过**——
+        这两条正是"忘了同步 GitHub"的两种表现，是三步制的自动守门。
+    """
+    print("[7] GitHub 同步状态")
+    if run(["git", "rev-parse", "--git-dir"]).returncode != 0:
+        report(7, "GitHub 同步检查", True,
+               "本目录不是 Git 仓库（如院内交付包，打包时已排除 .git）——本项不适用")
+        return
+    r = run(["git", "remote", "get-url", "origin"])
+    if r.returncode != 0:
+        report(7, "GitHub 同步检查", True,
+               "未配置 origin（离线/临时导出环境）——跳过；如需同步：git remote add origin <URL>")
+        return
+    url = r.stdout.strip()
+    report(7, f"远端 origin 已配置：{url.split('//')[-1]}", True)
+
+    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip() or "main"
+    # 不在此处 git fetch：体检要能在离线/院内网环境跑，网络等待会拖死它。
+    # 领先性按**本地跟踪引用** origin/<branch> 判定——三步制里第 3 步就是 push，
+    # push 会更新该引用，因此它准确反映"上次推送后本地是否又攒了新提交"。
+    if run(["git", "rev-parse", "--verify", "--quiet", f"origin/{branch}"]).returncode != 0:
+        report(7, "远端分支信息可用", True,
+               f"本地无 origin/{branch} 跟踪引用（尚未 fetch/push 过）——跳过领先性比对")
+    else:
+        r = run(["git", "rev-list", "--count", f"origin/{branch}..{branch}"])
+        ahead = int(r.stdout.strip() or 0)
+        report(7, f"本地无未推送提交（领先 origin/{branch} 共 {ahead} 个）", ahead == 0,
+               "" if ahead == 0 else f"有 {ahead} 个提交未推：git push origin {branch}")
+
+    # 工作区未提交改动（含未跟踪文件）
+    r = run(["git", "status", "--porcelain"])
+    dirty = [ln for ln in r.stdout.splitlines() if ln.strip()]
+    report(7, f"工作区已全部提交（{len(dirty)} 项未提交）", not dirty,
+           "" if not dirty else "有未提交改动：git add -A && git commit -m '...'")
+
+
 def main():
     fast = "--fast" in sys.argv
     os.chdir(REPO)
@@ -212,6 +255,7 @@ def main():
     check_leaks()
     check_docs_and_tests(fast)
     check_env()
+    check_github_sync()
     fails = [r for r in RESULTS if not r[2]]
     print(f"\n体检结果：{len(RESULTS) - len(fails)}/{len(RESULTS)} 通过" +
           ("" if not fails else f"，失败项：{[f[1] for f in fails]}"))

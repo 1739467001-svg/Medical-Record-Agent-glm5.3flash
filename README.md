@@ -18,6 +18,20 @@
 | `tools/` | 运维与接入工具：**case_ingest.py 真实案例接入传送带**（HIS 8 表 + 录音转写稿 → 脱敏演示数据，红线扫描强制）、asr_ingest.py 录音落位/批量转写、**asr_corpus.py 方言 ASR 语料库**（引擎对比/标注草稿/门槛进度，数据飞轮）、**asr_reconcile.py 双引擎交叉校订稿**（分歧点听辨清单，标注加速）、**hotword_harvest.py 热词表自动生长**（纠错对沉淀→候选清单→审核合并）、**hotword_audit.py 热词规则全语料审计**（双向核查误伤/过度拦截，发版关卡）、**asr_denoise_ab.py 语音增强前端实验台**（门诊噪声场景 A/B）、**asr_annotate.py 分歧点听辨工作台**（拆片/仲裁/成稿，标注加速）、check_repo.py 一键仓库体检、make_rehearsal_audio.py 彩排音频合成 | 可用 |
 | `deploy/` | 部署编排：云服务器版（docker-compose.server.yml/update/backup）+ **私有化交付套件 `deploy/offline/`**（make_delivery.sh 一键打包、install.sh 院内一键安装、verify.sh 验收自检）；交付文档见 `docs/私有化交付/`（01 部署说明书 / 02 验收报告模板 / **03 交付形态说明**——面向院方的交付形态与边界说明） | 可用 |
 
+## 开发与同步约定（三步制）
+
+每次修改按这三步一次完成，缺一不可（`tools/check_repo.py` 的 **[7] GitHub 同步状态**会自动核查后两步）：
+
+1. **更新 `docs/开发日志.md`**——追加当日条目（改动内容 + commit 哈希）；
+2. **本地提交**——`git add` → `git commit`；
+3. **推送 GitHub**——`git push origin main`（远端：https://github.com/1739467001-svg/Medical-Record-Agent-glm5.3flash）。
+
+收尾一条命令自检（任一步漏做即报失败）：
+
+```bash
+python3 tools/check_repo.py --fast   # [7] 会报"有 N 个提交未推"/"有未提交改动"
+```
+
 ## 快速开始
 
 ```bash
@@ -50,8 +64,9 @@ cd server && python3 -m unittest discover -s tests
 # 审签流/归档包导出/角色越权/限流/LLM 未配置降级/审计查询；临时库隔离）
 python3 server/tests/api_smoke.py
 
-# 一键仓库体检（P2-L，14 项：Python 编译/JS 语法/前后端 API 契约/onclick 引用/
-# 红线文件不入 Git/疑似密钥扫描/患者真名零入库/README 数字与实测一致/运行环境；--fast 跳过实测）
+# 一键仓库体检（P2-L，16 项：Python 编译/JS 语法/前后端 API 契约/onclick 引用/
+# 红线文件不入 Git/疑似密钥扫描/患者真名零入库/README 数字与实测一致/运行环境/
+# GitHub 同步状态（未推送提交 + 未提交改动即报错）；--fast 跳过实测）
 python3 tools/check_repo.py
 
 # 录音数据接入（P2-M，录音 Runbook 第 1-3 步自动化；仅限 git 忽略目录，真实录音/转写稿永不入库）
