@@ -15,7 +15,7 @@
 | `server/` | **P1 多智能体核心**：六智能体 + orchestrator（DAG+trace）；LLM API（流式 NDJSON）；**认证服务 auth.py**（三角色，生产 MySQL / 研发 SQLite 降级，PBKDF2 200k 轮）+ **归档审签 records.py**（真库归档/审签状态机/质控抽查/修改回流聚合）+ **单元测试 54 项**（tests/） | 已上线 |
 | `evaluation/` | 金标准反推评测框架 + 三类文书基线报告 + **一键回归自动化**（run_regression.py，md+json 双格式落盘、与上期 diff）；HIS 视图 **8 表全量加载**（医嘱/检验结果已接入生成端）；ASR 方言测试集标注脚手架 | 回归已自动化 |
 | `mcp-server/` | ASR MCP 服务器：统一语音识别接口，讯飞/阿里云/商汤/**本地自建（FunASR / faster-whisper）**可插拔引擎；**录音页真实链路已打通**（/asr/status 探测 + /asr/transcribe 转写，密钥后补即用，演示回放保留为降级）；**自建引擎落地**：FunASR（SenseVoice/SeACo 热词偏置）零外呼可跑，分段策略经首例真实方言录音实测修正（VAD+超长段能量切分）；热词变体族持续生长 | 自建引擎可用，等云端密钥 |
-| `tools/` | 运维与接入工具：**case_ingest.py 真实案例接入传送带**（HIS 8 表 + 录音转写稿 → 脱敏演示数据，红线扫描强制）、asr_ingest.py 录音落位/批量转写、**asr_corpus.py 方言 ASR 语料库**（引擎对比/标注草稿/门槛进度，数据飞轮）、**asr_reconcile.py 双引擎交叉校订稿**（分歧点听辨清单，标注加速）、**hotword_harvest.py 热词表自动生长**（纠错对沉淀→候选清单→审核合并）、**hotword_audit.py 热词规则全语料审计**（双向核查误伤/过度拦截，发版关卡）、**asr_denoise_ab.py 语音增强前端实验台**（门诊噪声场景 A/B）、**asr_annotate.py 分歧点听辨工作台**（拆片/仲裁/成稿，标注加速）、check_repo.py 一键仓库体检、make_rehearsal_audio.py 彩排音频合成 | 可用 |
+| `tools/` | 运维与接入工具：**case_ingest.py 真实案例接入传送带**（HIS 8 表 + 录音转写稿 → 脱敏演示数据，红线扫描强制）、asr_ingest.py 录音落位/批量转写、**asr_corpus.py 方言 ASR 语料库**（引擎对比/标注草稿/门槛进度，数据飞轮）、**asr_reconcile.py 双引擎交叉校订稿**（分歧点听辨清单，标注加速）、**hotword_harvest.py 热词表自动生长**（纠错对沉淀→候选清单→审核合并）、**hotword_audit.py 热词规则全语料审计**（双向核查误伤/过度拦截，发版关卡）、**asr_denoise_ab.py 语音增强前端实验台**（门诊噪声场景 A/B）、**asr_annotate.py 分歧点听辨工作台**（拆片/仲裁/成稿，标注加速）、check_repo.py 一键仓库体检、**preflight.py 演示前预检**（站点/上传入口/案例数据/LLM 密钥真实探针/生成链路/演示材料，一条命令，红项即拦截）、make_rehearsal_audio.py 彩排音频合成 | 可用 |
 | `deploy/` | 部署编排：云服务器版（docker-compose.server.yml/update/backup）+ **私有化交付套件 `deploy/offline/`**（make_delivery.sh 一键打包、install.sh 院内一键安装、verify.sh 验收自检）；交付文档见 `docs/私有化交付/`（01 部署说明书 / 02 验收报告模板 / **03 交付形态说明**——面向院方的交付形态与边界说明） | 可用 |
 
 ## 开发与同步约定（三步制）
@@ -53,7 +53,7 @@ python3 evaluation/run_regression.py
 # ASR MCP 服务器自测（mock 引擎，无需密钥）
 python3 mcp-server/test_client.py
 
-# 后端单元测试（零依赖 unittest，106 项：规范用语改写/无素材拦截/QC 回流/
+# 后端单元测试（零依赖 unittest，112 项：规范用语改写/无素材拦截/QC 回流/
 # 审签状态机/角色权限/修改回流聚合/老库迁移/登录防爆破/审计留痕/归档包导出/医疗热词/WAV直读/
 # 方言变体族热词/热词白名单防线/热词规则审计双向判据/语音增强A-B口径/标注工作台坐标映射/
 # 领域提示边界/
@@ -68,6 +68,9 @@ python3 server/tests/api_smoke.py
 # 红线文件不入 Git/疑似密钥扫描/患者真名零入库/README 数字与实测一致/运行环境/
 # GitHub 同步状态（未推送提交 + 未提交改动即报错）；--fast 跳过实测）
 python3 tools/check_repo.py
+
+# 院方演示前预检（一条命令：站点/上传入口/案例数据/LLM 密钥真实探针/生成链路/演示材料）
+python3 tools/preflight.py          # 公网；--local 打本地 8090；红项退出码 1
 
 # 录音数据接入（P2-M，录音 Runbook 第 1-3 步自动化；仅限 git 忽略目录，真实录音/转写稿永不入库）
 python3 tools/asr_ingest.py 病历资料/录音 --validate      # 落位校验：格式/命名 → 落位报告.md（无需密钥）
