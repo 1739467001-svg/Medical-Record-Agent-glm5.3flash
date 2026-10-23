@@ -44,5 +44,14 @@ check("空文本零轮次", parseTranscriptText("").length === 0, []);
 const t6 = parseTranscriptText("医生:半角冒号\n患者：全角冒号");
 check("半角冒号识别", t6.length === 2 && t6[0].text === "半角冒号", t6);
 
+// 7. ASR 导出件元数据行跳过：# 注释头 / --- 分节线（若雨 paraformer 导出格式，合成样本）
+const t7 = parseTranscriptText("# 标准录音 1.mp3\n# engine=DashScope hotwords=93\n# ts=2026-10-17 15:38:22\n\n--- ASR 原文 ---\n确。哦。他从昨天下午开始痛。\n\n--- 纠错后 ---\n确，他从昨天下午开始痛。");
+check("元数据行不产轮次", t7.length === 2 && t7.every(t => t.role === "对话"), t7);
+check("分节线内容不入素材", !t7.some(t => t.text.includes("---") || t.text.includes("engine=")), t7);
+
+// 8. 对话体 + 元数据行混合（元数据夹在对话之间也被跳过）
+const t8 = parseTranscriptText("# 转写稿\n医生：哪里不舒服\n# 自动标注\n患者：肚子疼");
+check("元数据行夹在对话间跳过", t8.length === 2 && t8[0].role === "医生" && t8[1].role === "患者", t8);
+
 if (failed) { console.error(`✗ ${failed} 个用例失败`); process.exit(1); }
 console.log("✓ parseTranscriptText 全部用例通过");

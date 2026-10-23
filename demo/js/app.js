@@ -643,6 +643,8 @@ function parseTranscriptText(text){
   const flush = () => { if (buf.length){ turns.push({ role: "对话", text: buf.join(" ").trim() }); buf = []; } };
   for (const ln of lines){
     if (!ln){ flush(); continue; }
+    // ASR 导出件的元数据行不是素材：# 注释头（引擎/时间戳）、--- 分节线（若雨 paraformer 导出即此格式）
+    if (/^#/.test(ln) || /^-{3,}.*-{3,}$/.test(ln)) continue;
     const m = ln.match(/^(医生|医师|大夫|患者|病人|家属|护士|对话|问|答)[：:]\s*(.+)$/);
     if (m){
       flush();
