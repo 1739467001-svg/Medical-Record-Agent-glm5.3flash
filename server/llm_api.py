@@ -247,8 +247,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": f"音频解码失败: {e}"})
         if len(raw) > ASR_MAX_AUDIO_BYTES:
             return self._json(413, {"error": "音频过大（>30MB），请分段录音"})
-        filename = os.path.splitext(os.path.basename(str(body.get("filename") or "recording")))[0].replace(" ", "_")[:64] or "recording"
-        fd, tmp = tempfile.mkstemp(prefix=f"mra_asr_{filename}_", suffix=".wav")
+        # 保留原始扩展名：上传的 mp3/m4a 由引擎侧 prepare_audio 转 16k WAV（此前一律落 .wav，非 WAV 文件会被误判为直通失败）
+        raw_name = os.path.basename(str(body.get("filename") or "recording"))
+        filename = os.path.splitext(raw_name)[0].replace(" ", "_")[:64] or "recording"
+        ext = os.path.splitext(raw_name)[1].lower()
+        if ext not in (".wav", ".mp3", ".m4a", ".aac", ".flac", ".webm", ".mp4"):
+            ext = ".wav"
+        fd, tmp = tempfile.mkstemp(prefix=f"mra_asr_{filename}_", suffix=ext)
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(raw)

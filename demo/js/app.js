@@ -439,6 +439,11 @@ function renderStepRecord(body, key, adm){
         <div class="rec-state" id="rec-state">点击开始问诊录音</div>
         <div class="wave" id="wave">${"<i></i>".repeat(24)}</div>
         <button class="btn big primary" id="rec-cta" style="margin-top:10px;width:100%">●&nbsp; 开始录音</button>
+        <div style="margin-top:10px">
+          <button class="btn big" id="rec-upload-btn" style="width:100%">📎&nbsp; 上传转写文本 / 音频</button>
+          <input type="file" id="rec-upload-input" accept=".txt,.md,.wav,.mp3,.m4a" style="display:none">
+          <div style="font-size:11px;color:var(--ink-3);margin-top:6px;line-height:1.7">院方已录好的问诊音频（.wav/.mp3/.m4a），或已解析的转写文本（.txt/.md），可直接上传后进入「智能体生成」——无需现场录音。上传材料将标注来源。</div>
+        </div>
         <div class="dialect-note">${real
           ? `🎙 <b>真实引擎已就绪</b>：${esc(S.asr.engine)} · 麦克风采集 16kHz PCM，结束后整段上传转写${esc(S.asr.note ? "（" + S.asr.note + "）" : "")}`
           : adm.real_recording
@@ -495,6 +500,16 @@ function renderStepRecord(body, key, adm){
       }
     }
   };
+  // 上传入口（张老师 10.20 要求）：录音按钮下方，文本/音频两条路径
+  const uploadBtn = document.getElementById("rec-upload-btn"), uploadInput = document.getElementById("rec-upload-input");
+  if (uploadBtn && uploadInput){
+    uploadBtn.onclick = () => uploadInput.click();
+    uploadInput.onchange = () => {
+      const f = uploadInput.files && uploadInput.files[0];
+      if (f) handleUpload(tp, key, f, uploadBtn);
+      uploadInput.value = "";
+    };
+  }
   // 演示回放（demo 模式入口 & 真实模式降级路径）
   window._startDemoReplay = () => {
     st.transcriptTurns = null; st.transcriptMeta = null;
@@ -556,19 +571,20 @@ function buildWavBase64(chunks, rate){
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
-async function transcribeReal(tp, key, wavB64, durSec, onFail){
+async function transcribeReal(tp, key, wavB64, durSec, onFail, filename){
   const st = flowState(key);
-  tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在上传音频并转写<span class="caret"></span><br><span style="font-size:11.5px">引擎 ${esc((S.asr || {}).engine || "")} · 录音时长 ${durSec}s · 整段文件识别</span></div>`;
+  tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在上传音频并转写<span class="caret"></span><br><span style="font-size:11.5px">引擎 ${esc((S.asr || {}).engine || "")}${durSec ? ` · 录音时长 ${durSec}s` : " · 上传文件"} · 整段文件识别</span></div>`;
   try{
     const r = await fetch("api/asr/transcribe", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio_base64: wavB64, filename: `问诊_${keyCode(key)}_${Date.now()}`, duration_sec: durSec }) });
+      body: JSON.stringify({ audio_base64: wavB64, filename: filename || `问诊_${keyCode(key)}_${Date.now()}`, duration_sec: durSec }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `AI 服务返回 ${r.status}`);
     st.transcriptTurns = (d.segments || []).map(s => ({
       role: s.speaker === "患者" ? "患者" : (s.speaker === "医生" ? "医生" : "对话"), text: s.text }));
     st.transcriptMeta = { engine: d.engine, duration_sec: d.duration_sec || durSec,
-                          mock: !!d.mock, warnings: d.warnings || [], transcribed_at: d.transcribed_at };
+                          mock: !!d.mock, warnings: d.warnings || [], transcribed_at: d.transcribed_at,
+                          uploaded: filename || null };
     st.transcriptDone = true;
     st.revealed = (st.transcriptTurns || []).length;
     renderTranscriptResult(tp, key);
@@ -578,6 +594,65 @@ async function transcribeReal(tp, key, wavB64, durSec, onFail){
       <button class="btn" style="margin-top:10px" onclick="window._startDemoReplay && window._startDemoReplay()">使用演示回放</button></div>`;
     if (onFail) onFail();
   }
+}
+/* 上传入口（张老师 10.20 要求）：文本直接解析为转写轮次，音频复用 /api/asr/transcribe 真实链路。
+   上传材料在转写区标注来源（文件名），沿用"演示数据明确标注"红线。 */
+function handleUpload(tp, key, file, btn){
+  const st = flowState(key);
+  const name = file.name || "上传材料";
+  const fail = msg => {
+    tp.innerHTML = `<div class="notice">⚠ 上传失败：${esc(msg)}<br>
+      <span style="font-size:11.5px">可重试上传；或先用演示回放继续体验后续流程（演示数据会明确标注，不会进入真实归档依据）。</span><br>
+      <button class="btn" style="margin-top:10px" onclick="window._startDemoReplay && window._startDemoReplay()">使用演示回放</button></div>`;
+    if (btn) btn.disabled = false;
+  };
+  if (btn) btn.disabled = true;
+  if (/\.(wav|mp3|m4a|aac|flac)$/i.test(name)){
+    tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在读取音频文件<span class="caret"></span><br><span style="font-size:11.5px">${esc(name)} · ${(file.size / 1048576).toFixed(1)} MB · 读取后自动转写</span></div>`;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const b64 = String(rd.result || "").replace(/^data:[^,]+,/, "");
+      transcribeReal(tp, key, b64, 0, () => { if (btn) btn.disabled = false; }, name);
+    };
+    rd.onerror = () => fail("音频读取失败");
+    rd.readAsDataURL(file);
+    return;
+  }
+  tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在解析上传文本<span class="caret"></span><br><span style="font-size:11.5px">${esc(name)} · ${(file.size / 1024).toFixed(1)} KB</span></div>`;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const turns = parseTranscriptText(String(rd.result || ""));
+    if (!turns.length){ fail("未解析到任何内容，请检查文件编码（需 UTF-8）或改用粘贴方式录入"); return; }
+    st.transcriptTurns = turns;
+    st.transcriptMeta = { engine: "上传文件", uploaded: name, mock: false, warnings: [], duration_sec: null };
+    st.transcriptDone = true;
+    st.revealed = turns.length;
+    persistFlow(key);
+    if (btn) btn.disabled = false;
+    renderTranscriptResult(tp, key);
+  };
+  rd.onerror = () => fail("文本读取失败");
+  rd.readAsText(file);
+}
+/* 转写文本解析：对话体（"医生：…/患者：…"）按行分轮；结构化叙述体（主诉/现病史…）按段兜底，
+   整段作为素材进智能体（若雨的解析成果即此形态） */
+function parseTranscriptText(text){
+  const lines = String(text || "").split(/\r?\n/).map(s => s.trim());
+  const turns = [];
+  let buf = [];
+  const flush = () => { if (buf.length){ turns.push({ role: "对话", text: buf.join(" ").trim() }); buf = []; } };
+  for (const ln of lines){
+    if (!ln){ flush(); continue; }
+    const m = ln.match(/^(医生|医师|大夫|患者|病人|家属|护士|对话|问|答)[：:]\s*(.+)$/);
+    if (m){
+      flush();
+      turns.push({ role: /医生|医师|大夫/.test(m[1]) ? "医生" : (/患者|病人|家属/.test(m[1]) ? "患者" : "对话"), text: m[2].trim() });
+    } else {
+      buf.push(ln);
+    }
+  }
+  flush();
+  return turns;
 }
 function transcriptTurns(key){
   const st = flowState(key);
@@ -640,7 +715,7 @@ function renderTranscriptResult(tp, key){
       <div class="who">${esc(t.role)}</div><div class="ts-bubble">${esc(t.text)}</div>
     </div>`).join("") + `
     <div class="md-doc">
-      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${adm.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">🎙 真实录音转写</span>' : ''}${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
+      <div class="md-title">📄 MD 转写过程稿 · 已挂载至住院时间线${adm.real_recording ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">🎙 真实录音转写</span>' : ''}${meta && meta.uploaded ? ` <span class="tag" style="background:var(--yellow-bg);color:var(--yellow)">📎 上传：${esc(meta.uploaded)}</span>` : ''}${st.transcriptEdit !== undefined ? ' <span class="tag" style="background:var(--green-bg);color:var(--green)">✓ 已人工修正</span>' : ''}${meta ? ` <span class="tag" style="background:var(--blue-bg);color:var(--blue)">引擎 ${esc(meta.engine)}${meta.mock ? " · 模拟输出" : ""}</span>` : ''}</div>
       <div class="md-body">${adm.transcript_md ? `<a href="data/${adm.transcript_md}" target="_blank" style="color:var(--primary);font-weight:600">${esc(adm.transcript_md)}</a> · ` : `问诊记录_${keyCode(key)}_${adm.admit_ts || ""}.md&nbsp;&nbsp;·&nbsp;&nbsp;`}${turns.length} 轮对话 · ${st.transcriptEdit !== undefined ? st.transcriptEdit.length : mdText.length - turns.length * 3} 字${meta ? ` · ${esc(meta.engine)}${meta.duration_sec ? " · " + meta.duration_sec + "s" : ""}` : adm.real_recording ? " · 本地转写 · LLM 角色标注" : " · 医生/患者角色已分离"} · 全文可溯源</div>
       ${(meta && (meta.warnings || []).length) ? `<div style="font-size:11px;color:var(--yellow);margin-top:6px">⚠ ${esc(meta.warnings.join("；"))}</div>` : ""}
       <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">

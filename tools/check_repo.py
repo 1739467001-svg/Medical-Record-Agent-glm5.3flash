@@ -52,6 +52,10 @@ def check_compile():
     try:
         r = run(["node", "--check", os.path.relpath(JS_MAIN, REPO)])
         report(1, "app.js node --check", r.returncode == 0, r.stderr.strip()[:120])
+        js_test = os.path.join(REPO, "demo", "tests", "upload_parse.test.js")
+        if os.path.exists(js_test):
+            r2 = run(["node", os.path.relpath(js_test, REPO)])
+            report(1, "上传解析 JS 回归（对话体/叙述体）", r2.returncode == 0, (r2.stdout + r2.stderr).strip()[:120])
     except FileNotFoundError:
         report(1, "app.js node --check", False, "本机无 node，无法校验")
 

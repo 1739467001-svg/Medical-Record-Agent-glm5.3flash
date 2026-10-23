@@ -53,18 +53,18 @@ python3 evaluation/run_regression.py
 # ASR MCP 服务器自测（mock 引擎，无需密钥）
 python3 mcp-server/test_client.py
 
-# 后端单元测试（零依赖 unittest，100 项：规范用语改写/无素材拦截/QC 回流/
+# 后端单元测试（零依赖 unittest，101 项：规范用语改写/无素材拦截/QC 回流/
 # 审签状态机/角色权限/修改回流聚合/老库迁移/登录防爆破/审计留痕/归档包导出/医疗热词/WAV直读/
 # 方言变体族热词/热词白名单防线/热词规则审计双向判据/语音增强A-B口径/标注工作台坐标映射/
 # 领域提示边界/
-# 案例接入传送带/时间穿越截断/XTextDocument 模板回填；临时 SQLite，不触碰研发数据）
+# 案例接入传送带/时间穿越截断/XTextDocument 模板回填/上传入口文本解析（对话体/叙述体，node 回归）；临时 SQLite，不触碰研发数据）
 cd server && python3 -m unittest discover -s tests
 
 # API 冒烟测试（HTTP 层端到端，22 项：起真实服务进程 → 路由/前缀剥离/会话/
 # 审签流/归档包导出/角色越权/限流/LLM 未配置降级/审计查询；临时库隔离）
 python3 server/tests/api_smoke.py
 
-# 一键仓库体检（P2-L，16 项：Python 编译/JS 语法/前后端 API 契约/onclick 引用/
+# 一键仓库体检（P2-L，17 项：Python 编译/JS 语法/上传解析 JS 回归/前后端 API 契约/onclick 引用/
 # 红线文件不入 Git/疑似密钥扫描/患者真名零入库/README 数字与实测一致/运行环境/
 # GitHub 同步状态（未推送提交 + 未提交改动即报错）；--fast 跳过实测）
 python3 tools/check_repo.py
