@@ -893,6 +893,9 @@ function renderAgentResult(body, key, result, doc){
   const s = result.stats;
   const docName = doc || "入院记录";
   body.innerHTML = `
+    <div class="doc-tabs">
+      ${FLOW_DOCS.map(d => `<button class="doc-tab ${d === docName ? "on" : ""}" onclick="setFlowDoc('${d}','${keyCode(key)}',${keyIdx(key)})">${DOC_META[d].icon} ${d}<small>${DOC_META[d].sub}</small></button>`).join("")}
+    </div>
     <div class="gen-progress"><i style="width:100%"></i></div>
     <div class="ag-grid">
       ${AGENTS.map((a, i) => {
