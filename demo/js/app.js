@@ -907,9 +907,12 @@ function renderAgentResult(body, key, result, doc){
       <b style="font-family:var(--serif)">生成统计（真实流水线 · ${esc(docName)}）</b>
       <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;line-height:1.9">
         真实草稿 ${s.passed_fields} 字段（蓝 ${s.by_source.blue} / 绿 ${s.by_source.green} / 灰 ${s.by_source.gray}）·
-        总耗时 ${(s.total_ms / 1000).toFixed(1)}s · 降级智能体：${s.degraded_agents.length ? esc(s.degraded_agents.join("、")) : "无"}
+        总耗时 ${(s.total_ms / 1000).toFixed(1)}s · ${s.llm_ok === false
+          ? '<b style="color:var(--yellow)">LLM 不可用（纯规则降级输出）</b>'
+          : `降级智能体：${s.degraded_agents.length ? esc(s.degraded_agents.join("、")) : "无"}`}
       </div>
     </div>
+    ${s.llm_ok === false ? `<div class="notice">⚠ <b>AI 生成引擎本次不可用</b>（LLM 调用失败，如密钥失效/超时/未配置）：上方结果为<b>纯规则降级输出</b>——蓝字段来自 HIS 带入、灰字段为规范所见，<b>对话提炼字段（绿）为 0 属预期</b>，不是系统在"编造"。请检查服务器 LLM 密钥后点「重新生成」。</div>` : ""}
     <div class="gen-done-cta">
       <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
         <button class="btn primary big" id="to-confirm">进入四色确认（真草稿）→</button>

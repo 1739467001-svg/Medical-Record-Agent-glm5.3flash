@@ -8,6 +8,17 @@ import time
 from . import extractor, aggregator, retriever, writer, qc, mapper
 from .common import trace_step
 
+
+def llm_ok_from_trace(trace):
+    """LLM 真实可用性（防 /health 假绿）：/health 只查环境变量是否设置、不探测密钥——
+    2026-10-23 公网实测密钥 401 失效仍显示"AI 服务在线"，结果静默降级为纯规则字段（绿 0）。
+    判定依据：extractor 唯一降级路径即 LLM 调用失败；writer 在 LLM 失败/未配置时同样告警。
+    其余智能体的正常降级（如 retriever 语料为空）不算 LLM 故障。"""
+    return not (any(t.get("agent") == "extractor" and t.get("status") == "degraded" for t in trace)
+                or any("LLM" in w for t in trace if t.get("agent") == "writer"
+                       for w in (t.get("warnings") or [])))
+
+
 def run_pipeline(transcript=None, his_views=None, patients_admission=None,
                  corpus=None, doc_type="入院记录", target_labels=None, on_step=None):
     """参数四选二（his_views 评测直连 / patients_admission 服务端 Demo）。
@@ -68,5 +79,6 @@ def run_pipeline(transcript=None, his_views=None, patients_admission=None,
              "passed_fields": len(mapped),
              "by_source": {s: sum(1 for f in mapped if f["source"] == s) for s in ("blue", "green", "gray")},
              "degraded_agents": [t["agent"] for t in trace if t["status"] in ("degraded", "skipped")],
+             "llm_ok": llm_ok_from_trace(trace),
              "qc": qc_report}
     return {"fields": mapped, "trace": trace, "stats": stats}

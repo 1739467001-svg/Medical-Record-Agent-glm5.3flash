@@ -196,5 +196,41 @@ class TestDocCutoff(unittest.TestCase):
         self.assertIn("今日出院", [o["text"] for o in ds["orders"]])
 
 
+class TestLlmOkFromTrace(unittest.TestCase):
+    """llm_ok_from_trace：LLM 真实可用性判定（防 /health 假绿——密钥 401 失效时
+    环境变量仍在、/health 显示在线，但 extractor/writer 已降级为纯规则输出）。"""
+
+    def test_extractor_degraded_means_llm_down(self):
+        from agents.orchestrator import llm_ok_from_trace
+        trace = [{"agent": "extractor", "status": "degraded",
+                  "summary": "抽取失败已降级：HTTP Error 401: Unauthorized", "warnings": []}]
+        self.assertFalse(llm_ok_from_trace(trace))
+
+    def test_writer_llm_warning_means_llm_down(self):
+        from agents.orchestrator import llm_ok_from_trace
+        trace = [{"agent": "extractor", "status": "ok", "summary": "抽取 5 项", "warnings": []},
+                 {"agent": "writer", "status": "ok", "summary": "生成 24 字段",
+                  "warnings": ["LLM 生成失败已降级（仅规则字段）：HTTP Error 401"]}]
+        self.assertFalse(llm_ok_from_trace(trace))
+
+    def test_writer_llm_unconfigured_means_llm_down(self):
+        from agents.orchestrator import llm_ok_from_trace
+        trace = [{"agent": "writer", "status": "ok", "summary": "生成 19 字段",
+                  "warnings": ["LLM 未配置：仅输出规则字段"]}]
+        self.assertFalse(llm_ok_from_trace(trace))
+
+    def test_normal_degradation_is_not_llm_failure(self):
+        from agents.orchestrator import llm_ok_from_trace
+        # retriever 语料为空是正常降级（非 LLM 故障）；extractor 正常 → llm_ok 为真
+        trace = [{"agent": "extractor", "status": "ok", "summary": "抽取 8 项", "warnings": ["低置信要素 头痛"]},
+                 {"agent": "retriever", "status": "degraded", "summary": "语料 0 条 → 仅规范要点", "warnings": []},
+                 {"agent": "writer", "status": "ok", "summary": "生成 30 字段", "warnings": []}]
+        self.assertTrue(llm_ok_from_trace(trace))
+
+    def test_empty_trace_is_llm_ok(self):
+        from agents.orchestrator import llm_ok_from_trace
+        self.assertTrue(llm_ok_from_trace([]))
+
+
 if __name__ == "__main__":
     unittest.main()
