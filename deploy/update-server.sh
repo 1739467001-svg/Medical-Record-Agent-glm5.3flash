@@ -28,11 +28,15 @@ fi
 
 echo ">>> [2/4] rsync 同步代码（增量，绕过 GitHub）"
 ssh "$HOST" "mkdir -p $REMOTE_DIR"
+# 排除项与 .gitignore 红线一一对应（本地新增会议文件夹/密钥文件绝不外传）：
+# 会议材料（含团队成员实名转写稿与微信截图）、录音（患者语音）、LLM/ASR 密钥、研发库
 rsync -az --delete \
   --exclude '.git' --exclude '.zcode' --exclude '.DS_Store' \
   --exclude 'server/local_dev.db' --exclude '__pycache__' \
   --exclude 'node_modules' --exclude '*.log' --exclude '*.zip' \
-  --exclude '9.24*/' --exclude '9.25*/' --exclude '病历资料/' \
+  --exclude '9.24*/' --exclude '9.25*/' --exclude '*项目组*' \
+  --exclude '*.mp3' --exclude '*.m4a' --exclude '*.wav' \
+  --exclude '.llm_env' --exclude '.llm_env*' --exclude '病历资料/' \
   "$REPO_DIR"/ "$HOST:$REMOTE_DIR"/
 
 echo ">>> [3/4] 重启 llm-api 容器（加载新后端）"
