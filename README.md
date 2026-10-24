@@ -40,7 +40,9 @@ cd demo && python3 -m http.server 8765
 # 打开 http://127.0.0.1:8765 —— 患者A「开始入院问诊」体验全流程（未登录=演示模式）
 
 # 完整体验（登录/注册 + AI 服务 + 新手引导；本地无 MySQL 自动降级 SQLite）
-MRA_STATIC_DIR="$PWD/demo" python3 server/llm_api.py
+# 真实生成需 LLM 网关：根目录 .llm_env（LLM_API_BASE/LLM_API_KEY/LLM_MODEL，chmod 600 不入库；
+# 支持 OpenAI 风格与 Anthropic 兼容网关，协议按 base URL 自动探测）：
+set -a; . ./.llm_env; set +a; MRA_STATIC_DIR="$PWD/demo" python3 server/llm_api.py
 # 打开 http://127.0.0.1:8090 —— 注册医生账号 → 首次登录自动播放五步新手引导
 
 # 评测基线（需院方原始数据包，本地运行、不入库）
