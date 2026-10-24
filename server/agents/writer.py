@@ -153,7 +153,7 @@ def generate(elements, dataset, knowledge, doc_type="入院记录", target_label
                 f"【写作规范要点】\n" + "\n".join("- " + k for k in knowledge) + "\n\n" + instruct)},
         ]
         try:
-            data = llm_json(messages, max_tokens=3500)
+            data = llm_json(messages, max_tokens=6000, list_key="fields")  # 长对话文书输出大，3500 偏紧  # qwen 偶发裸数组返回，归一
             for f in data.get("fields", []):
                 label, value = str(f.get("label", "")).strip(), str(f.get("value", "")).strip()
                 if not label or not value: continue

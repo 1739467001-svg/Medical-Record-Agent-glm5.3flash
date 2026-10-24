@@ -61,9 +61,9 @@ def qc(draft, dataset, doc_type=None):
         listing = "\n".join(f"- {f['label']}：{f['value'][:120]}（依据：{f['basis'][:60]}）" for f in greens)
         try:
             data = llm_json([
-                {"role": "system", "content": "你是病历质控医师。逐条检查下列草稿字段：医学逻辑矛盾、张冠李戴、把检查印象当病史、过度推断。只输出需修正项，没有则输出空数组。绝不新增字段。"},
+                {"role": "system", "content": "你是病历质控医师。逐条检查下列草稿字段：医学逻辑矛盾、张冠李戴、把检查印象当病史、过度推断。只输出需修正项，没有需修正项时输出 {\"fixes\":[]}。绝不新增字段。"},
                 {"role": "user", "content": listing + "\n\n输出 JSON：{\"fixes\":[{\"label\":\"字段名\",\"reason\":\"问题\",\"action\":\"remove|keep_with_warning\"}]}"},
-            ], max_tokens=600)
+            ], max_tokens=600, list_key="fixes")  # qwen 偶发裸数组返回，归一
             remove = {x["label"] for x in data.get("fixes", []) if x.get("action") == "remove"}
             for x in data.get("fixes", []):
                 warnings.append(f"QC 复核：{x.get('label')} — {x.get('reason')}")

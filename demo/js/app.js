@@ -794,7 +794,7 @@ function renderStepGenerate(body, key, adm){
     <div class="doc-tabs">
       ${FLOW_DOCS.map(d => `<button class="doc-tab ${d === curDoc ? "on" : ""}" onclick="setFlowDoc('${d}','${keyCode(key)}',${keyIdx(key)})">${DOC_META[d].icon} ${d}<small>${DOC_META[d].sub}</small></button>`).join("")}
     </div>
-    <div class="notice">⚡ <b>真实多智能体生成 · ${esc(curDoc)}</b>&nbsp;六个智能体正按流水线真实运行（DeepSeek 驱动，每个字段带来源与依据）；约 15~40 秒。${curDoc === "首次病程记录" ? "鉴别诊断/诊疗计划为知识辅助（灰源），须医生核定。" : "无录音模式下绿字段有限——这正是录音补采的意义。"}</div>
+    <div class="notice">⚡ <b>真实多智能体生成 · ${esc(curDoc)}</b>&nbsp;六个智能体正按流水线真实运行（${esc(S.llmEngine || "大模型")} 驱动，每个字段带来源与依据）；约 30~60 秒（真实大模型推理）。${curDoc === "首次病程记录" ? "鉴别诊断/诊疗计划为知识辅助（灰源），须医生核定。" : "无录音模式下绿字段有限——这正是录音补采的意义。"}</div>
     <div class="gen-progress"><i id="gen-bar"></i></div>
     <div class="ag-grid">
       ${AGENTS.map((a, i) => `
@@ -1736,7 +1736,7 @@ function viewAbout(){
       <ul>
         <li><b>数据</b>：源自院方提供的真实住院病历（金标准），已全部脱敏（患者A / 患者B；医生护士姓名、电话、详址已脱敏）。</li>
         <li><b>录音转写</b>：为按真实入院记录重构的模拟对话；正式环境接入方言 ASR 引擎（选型进行中）。</li>
-        <li><b>AI 生成</b>：患者A 流程中的草稿由<b>真实六智能体流水线</b>现场生成（DeepSeek 驱动，逐字段携带来源/依据/置信度，QC 智能体拦截臆造）；无录音模式下绿字段有限属真实能力边界。</li>
+        <li><b>AI 生成</b>：患者A 流程中的草稿由<b>真实六智能体流水线</b>现场生成（${esc(S.llmEngine || "大模型")} 驱动，逐字段携带来源/依据/置信度，QC 智能体拦截臆造）；无录音模式下绿字段有限属真实能力边界。</li>
         <li><b>归档</b>：模拟流程；正式环境经对接层回写院内电子病历系统（回写通路正与院方确认）。</li>
       </ul>
       <h2>四色确认（产品核心）</h2>
@@ -1904,6 +1904,7 @@ function startTour(replay){
     const el = document.getElementById("ai-status");
     if (el && d && d.ok){
       el.classList.add("on");
+      S.llmEngine = d.engine || "";
       el.title = "AI 服务在线 · " + (d.engine || "");
     } else if (el){
       el.title = "AI 服务离线（本地静态环境属正常）";

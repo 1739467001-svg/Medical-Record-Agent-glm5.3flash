@@ -36,10 +36,10 @@ def extract(transcript, doc_type="入院记录"):
             # 首例真实录音实证（患者F）的两类系统性误抽，明确禁止：
             "5) 医生宣布的诊疗安排（如'给你做个手术''去手术吧'）是本次诊疗计划，"
             "绝不能抽为患者既往史/手术外伤史；6) 家族史/过敏史只在对话明确问及时抽取，"
-            "不得从'没其他毛病'等笼统回答推断。")},
+            "不得从'没其他毛病'等笼统回答推断；7) 要素总数不超过 20 项，text 只抄原句短语不扩写，禁止重复输出相同 item。")},
     ]
     try:
-        data = llm_json(messages, max_tokens=2000)
+        data = llm_json(messages, max_tokens=4000, list_key="elements", temperature=0)  # 确定性抽取（qwen 实测：0.2 温度下同一输入偶发输出发散至截断）  # qwen 偶发裸数组返回，归一
         elems = [Element(section=str(e.get("section", "其他")), item=str(e.get("item", "")),
                          text=str(e.get("text", "")),
                          turns=[int(t) for t in e.get("turns", []) if str(t).isdigit()],

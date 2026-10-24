@@ -33,3 +33,5 @@ dist/
 
 # 热词表合并备份（hotword_harvest.py --merge 自动生成）
 *.bak-*
+# 根级 LLM/ASR 密钥文件（server/evaluation/mcp-server 共用，chmod 600；部署脚本 rsync 同步排除）
+.llm_env*

@@ -28,6 +28,7 @@ for _p in _MCP_CANDIDATES:
         sys.path.insert(0, _p)
         break
 from agents import run_pipeline  # noqa: E402
+from agents.common import llm_chat  # noqa: E402  协议风格自适应 LLM 客户端（Anthropic/OpenAI）
 import auth  # noqa: E402  登录/注册/会话（server/auth.py）
 import records  # noqa: E402  归档与审签流（server/records.py，P2-G）
 try:
@@ -93,15 +94,9 @@ def build_prompt(code, adm_idx):
     return prompt, None
 
 def call_llm(prompt):
-    body = json.dumps({"model": os.environ.get("LLM_MODEL", "Deepseek-v4-flash"),
-                       "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-                       "max_tokens": 700, "temperature": 0.3}).encode()
-    req = urllib.request.Request(os.environ["LLM_API_BASE"].rstrip("/") + "/chat/completions", data=body,
-                                 headers={"Content-Type": "application/json",
-                                          "Authorization": "Bearer " + os.environ["LLM_API_KEY"]})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read().decode())
-    return data["choices"][0]["message"]["content"].strip()
+    # 统一走 agents.common.llm_chat（协议风格自适应：Anthropic 兼容网关 / OpenAI 风格）
+    return llm_chat([{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+                    max_tokens=700, timeout=60, temperature=0.3)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
