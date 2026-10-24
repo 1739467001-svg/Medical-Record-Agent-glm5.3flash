@@ -1025,6 +1025,8 @@ function renderStepConfirm(body, key, adm){
       </span>
       <div style="display:flex;gap:10px">
         <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
+          <button class="btn big" onclick="downloadWord()">📄 下载 Word 报告</button>
+        <button class="btn big" onclick="downloadWord()">📄 下载 Word 报告</button>
         <button class="btn big" onclick="exportDraftXML()">导出草稿 XML</button>
         <button class="btn primary big" id="confirm-btn">✓ 医生确认无误，提交归档</button>
       </div>
@@ -1234,6 +1236,7 @@ function renderStepArchive(body, key, adm){
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/review'">查看审签进度 →</button>
           <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
+          <button class="btn big" onclick="downloadWord()">📄 下载 Word 报告</button>
           <button class="btn big" onclick="location.hash='#/workbench'">返回工作台</button>
         </div>` : `
         <div style="font-family:var(--serif);font-size:20px;font-weight:700;color:var(--green);margin-bottom:4px">已归档（模拟）</div>
@@ -1247,6 +1250,7 @@ function renderStepArchive(body, key, adm){
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
           <button class="btn primary big" onclick="location.hash='#/workbench'">返回工作台</button>
           <button class="btn big" onclick="printRecord()">🖨 打印 / 存 PDF</button>
+          <button class="btn big" onclick="downloadWord()">📄 下载 Word 报告</button>
           <button class="btn big" onclick="location.hash='#/patient/${keyCode(key)}'">在患者全景中查看</button>
         </div>`}
       </div>
@@ -1319,6 +1323,37 @@ function printRecord(){
   if (!root){ root = document.createElement("div"); root.id = "print-root"; document.body.appendChild(root); }
   root.innerHTML = buildPrintHTML(doc, { archiveNo: st.archive && st.archive.record_no, confirmedBy: st.confirmedBy });
   window.print();
+}
+
+/* Word 报告导出（院方 10-24 需求：XML 回填包之外要可编辑的 Word 版病历报告）。
+   零依赖：复用打印视图内容 + Word XML 头，application/msword + .doc，
+   Word/WPS 直接打开可编辑；样式内联（独立文档里没有站内 CSS 变量）。 */
+function downloadWord(){
+  const doc = window._draftDoc;
+  if (!doc) return alert("暂无可导出的文书——请先完成生成或进入归档页");
+  const st = flowState(S.curKey);
+  const inner = buildPrintHTML(doc, { archiveNo: st.archive && st.archive.record_no, confirmedBy: st.confirmedBy });
+  const wordHtml = `<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8"><title>${esc(doc.type)}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+<style>
+@page{size:A4;margin:2cm}
+body{font-family:"SimSun","Songti SC",serif;color:#111;font-size:12pt;line-height:1.8}
+.pr-hospital{font-size:9.5pt;color:#444;letter-spacing:.08em}
+h2{text-align:center;font-family:"SimHei","Heiti SC",serif;font-size:16pt;margin:6pt 0 2pt}
+.pr-meta{font-size:8.5pt;color:#555;text-align:center;border-bottom:1.5px solid #333;padding-bottom:8pt;margin-bottom:10pt}
+h3{font-size:11pt;border-left:3px solid #333;padding-left:6pt;margin:10pt 0 4pt}
+table{width:100%;border-collapse:collapse}
+td{border-bottom:1px solid #ddd;padding:4pt 5pt;font-size:10.5pt;line-height:1.7;vertical-align:top}
+.pr-lb{width:22%;color:#333;font-weight:600}
+.pr-foot{font-size:8.5pt;color:#666;margin-top:12pt;border-top:1px solid #ccc;padding-top:6pt}
+</style></head><body>${inner}</body></html>`;
+  const blob = new Blob(["\ufeff", wordHtml], { type: "application/msword" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${doc.type}_${keyCode(S.curKey)}_${(admOfKey(S.curKey) || {}).admit_ts || ""}.doc`;
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 /* ================================================================ */
@@ -1735,7 +1770,8 @@ function viewAbout(){
       <h2>演示边界（务必知悉）</h2>
       <ul>
         <li><b>数据</b>：源自院方提供的真实住院病历（金标准），已全部脱敏（患者A / 患者B；医生护士姓名、电话、详址已脱敏）。</li>
-        <li><b>录音转写</b>：为按真实入院记录重构的模拟对话；正式环境接入方言 ASR 引擎（选型进行中）。</li>
+        <li><b>患者F 为贵院真实问诊案例</b>：真实方言问诊录音转写、真实 HIS 数据，临床内容真实；按数据安全规范以代号展示（脱敏本身就是系统的安全设计），正式环境私有化部署、数据不出院。</li>
+        <li><b>录音转写</b>：患者A 为按真实入院记录重构的模拟对话；患者F 为真实录音本地转写（方言 + 医疗热词修正）。</li>
         <li><b>AI 生成</b>：患者A 流程中的草稿由<b>真实六智能体流水线</b>现场生成（${esc(S.llmEngine || "大模型")} 驱动，逐字段携带来源/依据/置信度，QC 智能体拦截臆造）；无录音模式下绿字段有限属真实能力边界。</li>
         <li><b>归档</b>：模拟流程；正式环境经对接层回写院内电子病历系统（回写通路正与院方确认）。</li>
       </ul>
@@ -1743,6 +1779,10 @@ function viewAbout(){
       <p>蓝 = 系统带入（HIS 数据）· 绿 = 对话提炼（可溯源到转写原文）· 灰 = 规范所见与知识辅助 · 黄 = 缺失待补（<b>严禁臆造，宁缺毋造</b>）。医生重点核对黄色与绿色，确认后归档，责任主体始终是医生。</p>
       <h2>安全与合规</h2>
       <p>全流程留痕（生成/修改/确认/归档记录操作人与时间）· 医生修改回流用于模型优化（数据闭环沉淀于院内）· 正式环境私有化部署，核心模型与数据不出院。</p>
+      <h2>报告与导出</h2>
+      <p><b>XML</b>（XTextDocument 院内回填格式）· <b>Word 报告</b>（可编辑，供病历讨论与存档）· <b>打印 / 存 PDF</b>（A4 病历版式）。医生在四色确认页与归档页均可导出。</p>
+      <h2>研发工具（非医生功能）</h2>
+      <p><a href="#/fieldmap" style="color:var(--primary)">字段地图 v0</a>（自动提取自 75 份真实文书的字段标签，供院方确认字段口径）——已从医生端页脚移除，仅供研发与院方信息科核对。</p>
     </div>
   </div>`;
 }
