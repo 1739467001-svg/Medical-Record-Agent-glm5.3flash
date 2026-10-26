@@ -510,9 +510,13 @@ function renderStepRecord(body, key, adm){
       uploadInput.value = "";
     };
   }
+  // 恢复：已有转写稿（上传/真实录音/修正）时直接呈现过程稿，而非显示"等待录音开始"
+  // （2026-10-24 实测修复：上传修正后刷新/返回再进，转写区空白但数据还在——界面与状态不一致）
+  if (st.transcriptDone) renderTranscriptResult(tp, key);
   // 演示回放（demo 模式入口 & 真实模式降级路径）
   window._startDemoReplay = () => {
     st.transcriptTurns = null; st.transcriptMeta = null;
+    st.transcriptEdit = undefined;
     startStreaming(tp, key);
   };
 }
@@ -600,12 +604,6 @@ async function transcribeReal(tp, key, wavB64, durSec, onFail, filename){
 function handleUpload(tp, key, file, btn){
   const st = flowState(key);
   const name = file.name || "上传材料";
-  const fail = msg => {
-    tp.innerHTML = `<div class="notice">⚠ 上传失败：${esc(msg)}<br>
-      <span style="font-size:11.5px">可重试上传；或先用演示回放继续体验后续流程（演示数据会明确标注，不会进入真实归档依据）。</span><br>
-      <button class="btn" style="margin-top:10px" onclick="window._startDemoReplay && window._startDemoReplay()">使用演示回放</button></div>`;
-    if (btn) btn.disabled = false;
-  };
   if (btn) btn.disabled = true;
   if (/\.(wav|mp3|m4a|aac|flac)$/i.test(name)){
     tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在读取音频文件<span class="caret"></span><br><span style="font-size:11.5px">${esc(name)} · ${(file.size / 1048576).toFixed(1)} MB · 读取后自动转写</span></div>`;
@@ -614,25 +612,45 @@ function handleUpload(tp, key, file, btn){
       const b64 = String(rd.result || "").replace(/^data:[^,]+,/, "");
       transcribeReal(tp, key, b64, 0, () => { if (btn) btn.disabled = false; }, name);
     };
-    rd.onerror = () => fail("音频读取失败");
+    rd.onerror = () => failUpload(tp, btn, "音频读取失败");
     rd.readAsDataURL(file);
     return;
   }
   tp.innerHTML = `<div style="text-align:center;color:var(--ink-3);font-size:13px;padding:60px 0">⏳ 正在解析上传文本<span class="caret"></span><br><span style="font-size:11.5px">${esc(name)} · ${(file.size / 1024).toFixed(1)} KB</span></div>`;
   const rd = new FileReader();
   rd.onload = () => {
-    const turns = parseTranscriptText(String(rd.result || ""));
-    if (!turns.length){ fail("未解析到任何内容，请检查文件编码（需 UTF-8）或改用粘贴方式录入"); return; }
-    st.transcriptTurns = turns;
-    st.transcriptMeta = { engine: "上传文件", uploaded: name, mock: false, warnings: [], duration_sec: null };
-    st.transcriptDone = true;
-    st.revealed = turns.length;
-    persistFlow(key);
-    if (btn) btn.disabled = false;
-    renderTranscriptResult(tp, key);
+    const text = String(rd.result || "");
+    if (text.includes("\uFFFD")){
+      // UTF-8 解码出现替换符 = 非 UTF-8 中文编码（Windows 记事本导出的 txt 默认 GBK）→ 按 GB18030 重读
+      const rd2 = new FileReader();
+      rd2.onload = () => applyUploadedText(String(rd2.result || ""), name, tp, key, btn);
+      rd2.onerror = () => failUpload(tp, btn, "文本读取失败");
+      rd2.readAsText(file, "GB18030");
+      return;
+    }
+    applyUploadedText(text, name, tp, key, btn);
   };
-  rd.onerror = () => fail("文本读取失败");
+  rd.onerror = () => failUpload(tp, btn, "文本读取失败");
   rd.readAsText(file);
+}
+/* 文本解码完成后落地：解析轮次 → 写流程状态 → 渲染（UTF-8 与 GB18030 两条读法共用） */
+function applyUploadedText(text, name, tp, key, btn){
+  const st = flowState(key);
+  const turns = parseTranscriptText(text);
+  if (!turns.length){ failUpload(tp, btn, "未解析到任何内容，请检查文件内容或改用粘贴方式录入"); return; }
+  st.transcriptTurns = turns;
+  st.transcriptMeta = { engine: "上传文件", uploaded: name, mock: false, warnings: [], duration_sec: null };
+  st.transcriptDone = true;
+  st.revealed = turns.length;
+  persistFlow(key);
+  if (btn) btn.disabled = false;
+  renderTranscriptResult(tp, key);
+}
+function failUpload(tp, btn, msg){
+  tp.innerHTML = `<div class="notice">⚠ 上传失败：${esc(msg)}<br>
+    <span style="font-size:11.5px">可重试上传；或先用演示回放继续体验后续流程（演示数据会明确标注，不会进入真实归档依据）。</span><br>
+    <button class="btn" style="margin-top:10px" onclick="window._startDemoReplay && window._startDemoReplay()">使用演示回放</button></div>`;
+  if (btn) btn.disabled = false;
 }
 /* 转写文本解析：对话体（"医生：…/患者：…"）按行分轮；结构化叙述体（主诉/现病史…）按段兜底，
    整段作为素材进智能体（若雨的解析成果即此形态） */
@@ -708,7 +726,9 @@ function finishTranscript(tp, key){
 }
 function renderTranscriptResult(tp, key){
   const st = flowState(key);
-  const turns = transcriptTurns(key);
+  // 有修正稿时展示修正后的文本（2026-10-24 实测修复：此前气泡仍渲染改前文本，
+  // 与生成实际消费的 transcriptEdit 不一致——医生改完看不到自己的修改）
+  const turns = st.transcriptEdit !== undefined ? parseTranscriptText(st.transcriptEdit) : transcriptTurns(key);
   const meta = st.transcriptMeta;
   const mdText = transcriptText(key);
   const adm = admOfKey(key) || {};
