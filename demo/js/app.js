@@ -1845,6 +1845,15 @@ function renderUserArea(){
     el.innerHTML = `<button class="btn primary" style="padding:7px 16px" onclick="location.hash='#/login'">登录 / 注册</button>`;
   }
 }
+/* 演示账号一键填充（2026-10-24 院方演示：三角色登录是动线一部分，免现场手打；
+   密码不显示在页面上，填充后为掩码，投屏不泄露） */
+function fillDemo(user){
+  const u = document.getElementById("au-user"), p = document.getElementById("au-pwd");
+  if (!u || !p) return;
+  u.value = user; p.value = "Demo@2026";
+  const err = document.getElementById("auth-err");
+  if (err) err.style.display = "none";
+}
 async function authPost(path, data){
   const r = await fetch("api" + path, { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
@@ -1879,6 +1888,16 @@ function viewAuth(mode){
         <label class="auth-lab">密码<input id="au-pwd" type="password" maxlength="64" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')submitAuth('${isReg ? "register" : "login"}')"></label>
         ${isReg ? `<label class="auth-lab">确认密码<input id="au-pwd2" type="password" maxlength="64" onkeydown="if(event.key==='Enter')submitAuth('register')"></label>` : ""}
         <button class="btn primary big" style="width:100%;justify-content:center;margin-top:6px" onclick="submitAuth('${isReg ? "register" : "login"}')">${isReg ? "注册并进入" : "登 录"}</button>
+        ${isReg ? "" : `
+        <div class="auth-demo">
+          <div class="auth-demo-t">演示账号（点击一键填充）</div>
+          <div class="auth-demo-row">
+            <button type="button" class="auth-demo-btn" onclick="fillDemo('demo_res')"><b>住院医师</b><span>demo_res</span></button>
+            <button type="button" class="auth-demo-btn" onclick="fillDemo('demo_att')"><b>上级医师</b><span>demo_att</span></button>
+            <button type="button" class="auth-demo-btn" onclick="fillDemo('demo_qc')"><b>质控科</b><span>demo_qc</span></button>
+          </div>
+          <div class="auth-demo-p">三角色对应病历责任矩阵：书写归档 / 审签 / 抽查。演示环境专用账号，请勿填入真实工号密码。</div>
+        </div>`}
         <div class="auth-foot">
           <a href="#" onclick="enterDemo();return false">先逛逛，进入演示模式 →</a>
           <span>${isReg ? "已有账号？" : "没有账号？"}<a href="${isReg ? "#/login" : "#/register"}">${isReg ? "去登录" : "立即注册"}</a></span>
