@@ -23,7 +23,7 @@
 退出码：任一检查失败为 1（可直接挂到演示前检查清单里）。
 零第三方依赖（标准库 urllib）。
 """
-import argparse, json, os, sys, urllib.request, urllib.error
+import argparse, base64, json, os, sys, urllib.request, urllib.error
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_URL = "http://60.205.204.162/mra/"
@@ -43,10 +43,12 @@ def report(name, ok, detail=""):
     print(("  ✓ " if ok else "  ✗ ") + name + (f" — {detail}" if detail else ""))
 
 
-def get(base, path, timeout=20):
+def get(base, path, timeout=20, auth=None):
     if not path.startswith("/"):
         path = "/" + path
     req = urllib.request.Request(base.rstrip("/") + path, method="GET")
+    if auth:
+        req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, r.read().decode("utf-8", "replace")
 
@@ -60,14 +62,17 @@ def events_show_llm_failure(events):
                for t in events)
 
 
-def probe_generate(base):
+def probe_generate(base, auth=None):
     """最小 transcript 打生成接口，流式读 NDJSON 事件。
     返回 (events, llm_ok, err_text)。降级/401 都如实反映。"""
     body = json.dumps({
         "code": "DA0001", "admission": 1, "doc": "入院记录",
         "transcript": "医生：哪里不舒服\n患者：测试演示预检。\n医生：多久了\n患者：一天。"}).encode()
+    headers = {"Content-Type": "application/json"}
+    if auth:
+        headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
     req = urllib.request.Request(base.rstrip("/") + "/api/generate-draft", data=body,
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=headers, method="POST")
     events, err_text, llm_ok = [], "", None
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
@@ -103,34 +108,42 @@ def main():
     ap.add_argument("--local", action="store_true", help="检查本地 http://127.0.0.1:8090/")
     ap.add_argument("--url", default=None, help="自定义 base URL")
     ap.add_argument("--material", default=MATERIAL, help="演示上传材料路径")
+    ap.add_argument("--auth", default=os.environ.get("MRA_HTTP_AUTH", "mra:MRA-demo-2026"),
+                    help="公网门禁 Basic Auth 凭证 user:pass（公网 2026-10-29 起有门禁；本地不需要）")
     args = ap.parse_args()
     base = args.url or ("http://127.0.0.1:8090/" if args.local else DEFAULT_URL)
-    print(f"演示前预检 · 目标 {base}")
+    auth = None if args.local else args.auth
+    print(f"演示前预检 · 目标 {base}" + ("（带门禁凭证）" if auth else ""))
 
     head("[1] 站点可达")
     try:
-        st, html = get(base, "")
+        st, html = get(base, "", auth=auth)
         report("首页 200 且标题正确", st == 200 and "AI 病历智能体" in html, f"status={st}")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            report("首页可达", False, "401 门禁拒绝——公网已加 Basic Auth，请传 --auth user:pass（默认 mra:MRA-demo-2026）")
+        else:
+            report("首页可达", False, str(e))
     except Exception as e:
         report("首页可达", False, str(e))
 
     head("[2] 上传入口在位（张老师 10.20 要求）")
     try:
-        st, js = get(base, "js/app.js")
+        st, js = get(base, "js/app.js", auth=auth)
         report("app.js 含上传入口", "rec-upload-btn" in js and "handleUpload" in js)
     except Exception as e:
         report("app.js 可取回", False, str(e))
 
     head("[3] 患者F 真实案例在位")
     try:
-        st, pj = get(base, "data/patients.json")
+        st, pj = get(base, "data/patients.json", auth=auth)
         codes = [p.get("code") for p in json.loads(pj)]
         report("patients.json 含 DA0006", "DA0006" in codes, f"患者 {codes}")
     except Exception as e:
         report("patients.json 可取回", False, str(e))
 
     head("[4] LLM 真实可用（核心：/health 只查环境变量，不探测密钥）")
-    events, llm_ok, err_text = probe_generate(base)
+    events, llm_ok, err_text = probe_generate(base, auth)
     degraded = events_show_llm_failure(events)
     if err_text and not events:
         report("生成接口可调", False, err_text[:120])

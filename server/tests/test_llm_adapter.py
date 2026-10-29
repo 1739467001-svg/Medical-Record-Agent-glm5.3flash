@@ -253,3 +253,52 @@ class TestLlmJsonTruncationRetry(unittest.TestCase):
         with mock.patch.object(common, "_llm_call", fake_call):
             with self.assertRaises(Exception):
                 common.llm_json([{"role": "user", "content": "x"}], max_tokens=100)
+
+
+class TestDeidScan(unittest.TestCase):
+    """脱敏校验（作品集/合规演示）：演示数据红线模式扫描——手机号/证件号/长数字标识零命中。"""
+
+    def setUp(self):
+        import importlib.util, tempfile
+        spec = importlib.util.spec_from_file_location(
+            "llm_api", os.path.join(SERVER_DIR, "llm_api.py"))
+        self.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+        self.tmp = tempfile.mkdtemp()
+
+    def _write(self, name, text):
+        with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_clean_data(self):
+        self._write("patients.json", '[{"code":"DA0001","display":"患者A"}]')
+        self._write("t.md", "# 问诊记录\n医生：你好")
+        r = self.mod.deid_scan(self.tmp)
+        self.assertTrue(r["clean"])
+        self.assertEqual(len(r["files"]), 2)
+        self.assertEqual(r["hits"], [])
+
+    def test_phone_detected_and_masked(self):
+        self._write("a.json", '{"note":"联系 13812345678"}')
+        r = self.mod.deid_scan(self.tmp)
+        self.assertFalse(r["clean"])
+        self.assertEqual(r["hits"][0]["pattern"], "手机号")
+        self.assertNotIn("13812345678", r["hits"][0]["sample"])  # 样本掩码
+
+    def test_id_card_detected(self):
+        self._write("a.md", "证件 110101199003077758")
+        r = self.mod.deid_scan(self.tmp)
+        self.assertFalse(r["clean"])
+        self.assertEqual(r["hits"][0]["pattern"], "身份证号")
+
+    def test_long_digit_id_detected(self):
+        self._write("a.json", '{"PATIENT_ID":"2001028657"}')
+        r = self.mod.deid_scan(self.tmp)
+        self.assertFalse(r["clean"])
+        self.assertTrue(any("长数字" in h["pattern"] for h in r["hits"]))
+
+    def test_non_data_exts_skipped(self):
+        self._write("note.txt", "手机 13812345678 不应被扫描")
+        r = self.mod.deid_scan(self.tmp)
+        self.assertTrue(r["clean"])
+        self.assertEqual(r["files"], [])

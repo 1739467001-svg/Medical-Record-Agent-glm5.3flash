@@ -10,7 +10,7 @@ AI 病历智能体 · 服务端 LLM API（Demo 用）
   - 进程内限流（默认 6 次/分钟/IP）
 运行：python3 llm_api.py（端口 8090，仅 127.0.0.1 经 nginx /mra/api/ 反代暴露）
 """
-import json, os, sys, time, urllib.request, collections, base64, tempfile
+import json, os, re, sys, time, urllib.request, collections, base64, tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +56,37 @@ ASR_MAX_AUDIO_BYTES = 30 * 1024 * 1024  # base64 前原始音频上限
 
 # 真实引擎 = 配置了真实密钥/模型的引擎（mock 与占位适配器不算）
 _ASR_REAL_ENGINES = ("xfyun", "aliyun", "sensetime", "local-whisper")
+
+# ---- 数据脱敏校验（作品集/合规演示用）：对演示数据跑红线模式扫描 ----
+# 说明：真实姓名/代号映射只在研发机（git 忽略区），服务器本就不持有真实姓名——
+# 这里校验的是"标识符模式"（手机号/证件号/住院号等）零命中，证明交付数据不带可识别信息。
+_DEID_PATTERNS = {
+    "手机号": re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
+    "身份证号": re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"),
+    "长数字标识(≥10位, 疑似住院号/PATIENT_ID)": re.compile(r"(?<!\d)\d{10,}(?!\d)"),
+}
+_DEID_SCAN_EXTS = (".json", ".md")
+
+def deid_scan(data_dir):
+    """扫描演示数据目录，返回 {files, hits, patterns, clean}。任一模式命中即不 clean。"""
+    hits, files = [], []
+    for root, _, names in os.walk(data_dir):
+        for fn in sorted(names):
+            if not fn.lower().endswith(_DEID_SCAN_EXTS):
+                continue
+            fp = os.path.join(root, fn)
+            rel = os.path.relpath(fp, data_dir)
+            files.append(rel)
+            try:
+                text = open(fp, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for label, rx in _DEID_PATTERNS.items():
+                for m in rx.finditer(text):
+                    hits.append({"file": rel, "pattern": label,
+                                 "sample": m.group(0)[:4] + "****"})
+    return {"files": files, "hits": hits, "patterns": list(_DEID_PATTERNS),
+            "clean": not hits}
 
 def asr_status():
     """ASR 引擎就绪状态（前端据此切换 真实录音/演示回放）。适配器不可用时优雅降级。"""
@@ -163,6 +194,11 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth": auth.BACKEND})
         if path == "/asr/status":
             return self._json(200, asr_status())
+        if path == "/deid-check":
+            data_dir = os.environ.get("MRA_DATA_PATH", "")
+            data_dir = os.path.dirname(data_dir) if data_dir else os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "demo", "data")
+            return self._json(200, deid_scan(data_dir))
         if path.startswith("/auth/"):
             return auth.handle(self, {}, path)
         if path == "/records" or path.startswith("/records/"):

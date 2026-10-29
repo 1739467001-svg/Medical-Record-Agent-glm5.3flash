@@ -1803,8 +1803,34 @@ function viewAbout(){
       <p><b>XML</b>（XTextDocument 院内回填格式）· <b>Word 报告</b>（可编辑，供病历讨论与存档）· <b>打印 / 存 PDF</b>（A4 病历版式）。医生在四色确认页与归档页均可导出。</p>
       <h2>研发工具（非医生功能）</h2>
       <p><a href="#/fieldmap" style="color:var(--primary)">字段地图 v0</a>（自动提取自 75 份真实文书的字段标签，供院方确认字段口径）——已从医生端页脚移除，仅供研发与院方信息科核对。</p>
+      <h2>数据脱敏与合规</h2>
+      <p>双重脱敏设计：<b>① 接入时</b>——真实数据进入演示库前逐 token 红线扫描（患者姓名/医护姓名/住院号/手机号/证件号零命中才落盘；医护按"姓+医生/护士"改写），真实姓名与代号映射表仅存于研发机 git 忽略区，<b>服务器本就不持有可识别信息</b>；<b>② 线上可复检</b>——随时对交付数据重跑标识符模式扫描。</p>
+      <div style="margin-top:10px">
+        <button class="btn" id="deid-check-btn">🔍 运行脱敏校验</button>
+        <div id="deid-result" style="margin-top:10px"></div>
+      </div>
     </div>
   </div>`;
+  const db = document.getElementById("deid-check-btn");
+  if (db) db.onclick = runDeidCheck;
+}
+/* 数据脱敏校验（作品集/合规演示）：对线上演示数据跑标识符模式扫描，零命中即通过 */
+async function runDeidCheck(){
+  const box = document.getElementById("deid-result");
+  if (!box) return;
+  box.innerHTML = `<div style="font-size:12px;color:var(--ink-3)">⏳ 正在扫描演示数据（手机号 / 身份证号 / 长数字标识）…</div>`;
+  try {
+    const r = await fetch("api/deid-check");
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `服务返回 ${r.status}`);
+    if (!d.clean){
+      box.innerHTML = `<div class="notice">⚠ 发现 <b>${d.hits.length}</b> 处疑似标识符：${d.hits.map(h => `${esc(h.file)}（${esc(h.pattern)}）`).join("；")}——按红线应立即下线排查。</div>`;
+      return;
+    }
+    box.innerHTML = `<div style="border:1px solid var(--green-line);background:var(--green-bg);border-radius:10px;padding:10px 14px;font-size:12.5px;color:var(--green);line-height:1.8">✓ <b>校验通过</b>：已扫描 ${d.files.length} 个数据文件（${d.files.map(esc).join("、")}），三类标识符模式<b>零命中</b>——交付数据不含可识别个人信息。</div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="notice">⚠ 校验失败：${esc(e.message || e)}（本地静态环境无此接口属正常，公网/本地服务端可用）</div>`;
+  }
 }
 
 /* ================================================================
