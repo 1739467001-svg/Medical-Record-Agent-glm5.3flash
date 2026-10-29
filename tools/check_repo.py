@@ -63,7 +63,7 @@ def check_compile():
 def server_routes():
     """从 auth.py / records.py 的路由表与 llm_api.py 字面量提取服务端路径集合。
     records.py 路由表存的是剥掉 /records 前缀的子路径，这里补全。"""
-    routes = {"/health", "/asr/status", "/asr/transcribe", "/generate-summary", "/generate-draft"}
+    routes = {"/health", "/asr/status", "/asr/transcribe", "/generate-summary", "/generate-draft", "/deid-check"}
     src = open(os.path.join(REPO, "server/auth.py"), encoding="utf-8").read()
     routes |= set(re.findall(r'\("(?:GET|POST)", "(/[^"]*)"\)', src))
     src = open(os.path.join(REPO, "server/records.py"), encoding="utf-8").read()
