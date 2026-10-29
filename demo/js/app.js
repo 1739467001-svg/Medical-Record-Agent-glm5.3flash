@@ -97,7 +97,7 @@ function route(){
   const parts = hash.slice(2).split("/");
   const [view, a, b] = parts;
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.remove("active"));
-  const navMap = { workbench: "工作台", review: "审签", manual: "手册", about: "说明" };
+  const navMap = { workbench: "工作台", review: "审签", showcase: "项目介绍", manual: "手册", about: "说明" };
   const navEl = [...document.querySelectorAll("[data-nav]")].find(n => n.textContent === navMap[view]);
   if (navEl) navEl.classList.add("active");
   window.scrollTo(0, 0);
@@ -107,6 +107,7 @@ function route(){
   if (view === "fieldmap") return viewFieldmap();
   if (view === "manual") return viewManual();
   if (view === "about") return viewAbout();
+  if (view === "showcase") return viewShowcase();
   if (view === "review") return viewReview();
   viewWorkbench();
 }
@@ -163,7 +164,7 @@ function viewWorkbench(){
     try { const s = JSON.parse(localStorage.getItem("mra_flow_" + t.key)); return s && s.step !== 4; } catch (e) { return true; }
   }).length;
   $app.innerHTML = `
-    <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者均已脱敏。患者A/B 数据源自院方真实住院病历（金标准文书），对话为按真实入院记录重构的模拟问诊；<b>患者F 为首例真实录音案例</b>——录音经本地转写、脱敏后接入，全流程真实运行。草稿由多智能体实时生成，医生确认后方可归档。</div>
+    <div class="notice">⚠ <b>演示说明</b>&nbsp;本工作台为项目演示环境：患者均已脱敏。患者A/B 数据源自院方真实住院病历（金标准文书），对话为按真实入院记录重构的模拟问诊；<b>患者F 为首例真实录音案例</b>——录音经本地转写、脱敏后接入，全流程真实运行。草稿由多智能体实时生成，医生确认后方可归档。<a href="#/showcase" style="color:var(--primary);font-weight:600;white-space:nowrap">第一次了解本项目？看项目介绍 →</a></div>
     <div class="page-head">
       <div class="page-title">工作台<small>${S.user ? esc(S.user.name) + (S.user.department ? " · " + esc(S.user.department) : "") : "王医生"} · 演示数据集</small></div>
       <div style="display:flex;gap:8px"><button class="btn" onclick="startTour(true)">▶ 新手引导</button><button class="btn" onclick="location.hash='#/manual'">📖 医生操作手册</button><button class="btn" onclick="location.hash='#/about'">了解系统边界</button></div>
@@ -774,6 +775,88 @@ function editTranscript(tp, key){
     persistFlow(key);
     finishTranscript(tp, key);
   };
+}
+
+
+/* ---------------- 作品集展示页（#/showcase）：项目叙事 + 实测数据 + 工程亮点 ---------------- */
+function viewShowcase(){
+  const agentRows = AGENTS.map((a, i) => `
+    <div class="sc-agent"><div class="sc-agent-ic">${a.icon}</div><div><b>${a.name}</b>
+      <small>${["从问诊对话抽取医学要素（带轮次出处）", "从 HIS 汇聚检验/检查/医嘱/体征", "检索规范要点与同类写法", "生成病历草稿（逐字段来源+依据）", "拦截过度推断与医学逻辑矛盾", "映射至院内 XML 模板字段绑定"][i]}</small></div></div>`).join("");
+  const metric = (n, t) => `<div class="sc-metric"><b>${n}</b><small>${t}</small></div>`;
+  $app.innerHTML = `
+  <div class="sc-wrap">
+    <section class="sc-hero">
+      <div class="sc-hero-tag">个人作品 · 医疗 AI 工程</div>
+      <h1>AI 病历智能体 · 医生工作台</h1>
+      <p class="sc-hero-sub">方言问诊录音 → 六智能体协作 → 带溯源的病历草稿：把"医生口述看病"变成"结构化电子病历"，<b>AI 只出草稿，医生确认后才归档，责任主体始终是医生</b>。</p>
+      <div class="sc-hero-cta">
+        <a class="btn primary big" href="#/workbench">进入演示工作台 →</a>
+        <a class="btn big" href="#/about">系统说明与演示边界</a>
+      </div>
+      <div class="sc-metrics">
+        ${metric("43s", "真实案例端到端生成耗时（公网实测）")}
+        ${metric("32 字段", "单份入院记录草稿（蓝8/绿5/灰19）")}
+        ${metric("100%", "绿字段可溯源至问诊原话")}
+        ${metric("137 项", "单元测试全绿 + 一条命令体检")}
+        ${metric("3 类", "ASR 引擎可插拔 · 2 类 LLM 协议自适应")}
+      </div>
+      <div class="sc-hero-note">开发者：俊业 · 2026 · 数据全部脱敏展示，公网访问有门禁（防爬取/防白嫖）</div>
+    </section>
+
+    <section class="sc-sec">
+      <h2>问题：病历书写的时间黑洞</h2>
+      <div class="sc-cols">
+        <div>住院医师约 <b>30%~50%</b> 的工时花在病历书写上；三甲医院日均产生大量入院记录/病程记录，且法定时限刚性（入院记录 24h、首次病程 8h）。</div>
+        <div>基层/方言场景更难：山东方言问诊录音机器转写错误率高（患者F 实测 whisper-small CER 66.5%），医生宁可手敲也不信转写稿。</div>
+        <div>直接上"AI 全自动写病历"院方不敢用——<b>缺的不是生成能力，是可核验的责任边界</b>。</div>
+      </div>
+    </section>
+
+    <section class="sc-sec">
+      <h2>方案：六个智能体协作的流水线</h2>
+      <div class="sc-agents">${agentRows}</div>
+      <p class="sc-cap">编排器按 DAG 调度（抽取/汇聚/检索并行 → 生成 → 质控 → 映射），全程流式推送；任一智能体失败只降级自身，流水线不崩。</p>
+    </section>
+
+    <section class="sc-sec">
+      <h2>核心设计：四色确认——让医生敢用</h2>
+      <div class="sc-cols4">
+        <div class="sc-c4 sc-c4-b"><b>🔵 蓝 · HIS 带入</b><small>体温/检验/医嘱等院内数据自动带入，非 AI 猜测</small></div>
+        <div class="sc-c4 sc-c4-g"><b>🟢 绿 · 对话提炼</b><small>每个绿字段可溯源到问诊原话轮次，点开即对照</small></div>
+        <div class="sc-c4 sc-c4-w"><b>⚪ 灰 · 规范所见</b><small>按临床常规合成的表述，请医生过目</small></div>
+        <div class="sc-c4 sc-c4-y"><b>🟡 黄 · 缺失待补</b><small>对话没提到的宁可空着也不编造——医疗安全底线</small></div>
+      </div>
+      <p class="sc-cap">配套：修改留痕（改前改后）/ 审签流（住院医师→上级医师→质控科抽查）/ 全程审计日志只追加不可篡改。</p>
+    </section>
+
+    <section class="sc-sec">
+      <h2>实测数据（真实案例，非演示脚本）</h2>
+      <table class="sc-tb">
+        <tr><th>场景</th><th>数据</th><th>说明</th></tr>
+        <tr><td>真实方言录音端到端</td><td>43s · 32 字段（蓝8/绿5/灰19）</td><td>公网 qwen-max 实时生成；绿=主诉/现病史/既往史/个人史/婚育史</td></tr>
+        <tr><td>方言转写难度基线</td><td>CER 66.5% → 56.9%</td><td>患者F 93.7s 录音：whisper-small → +LLM 方言纠错级联，事实保留 12/12</td></tr>
+        <tr><td>无录音 vs 有录音</td><td>绿 0 → 绿 5+</td><td>同一患者：无录音时病史类字段硬拦截；有转写稿后整体解锁</td></tr>
+        <tr><td>质控防线实例</td><td>拦截过度推断</td><td>真实运行中 QC 复核曾拦下"把检查印象当病史"并移除该字段</td></tr>
+      </table>
+    </section>
+
+    <section class="sc-sec">
+      <h2>工程化：不只是 Demo</h2>
+      <div class="sc-cols">
+        <div><b>可插拔引擎</b>：ASR 三引擎（讯飞/阿里/商汤骨架/本地 Whisper）适配器模式；LLM 双协议自适应（OpenAI / Anthropic 兼容网关，system 提升/裸数组归一/截断自愈/SSL 重试）</div>
+        <div><b>数据安全</b>：接入时红线扫描（姓名/住院号/手机号/证件号零命中才落盘）+ 线上可复检（本页「说明」页有校验按钮）；真实数据永不入 Git</div>
+        <div><b>质量守门</b>：137 项单测 + HTTP 冒烟 + 一键体检（编译/契约/onclick/红线/数字防漂移/同步状态），服务器公网门禁防爬取</div>
+        <div><b>部署运维</b>：Docker Compose 双容器（nginx 静态 + Python 后端）+ MySQL 认证 + 127.0.0.1 绑定 + Nginx 反代 + 预检工具，一条命令部署、一键回滚</div>
+      </div>
+    </section>
+
+    <section class="sc-sec sc-sec-cta">
+      <h2>自己走一遍</h2>
+      <p>演示工作台可用三角色账号一键登录（住院医师书写 / 上级医师审签 / 质控科抽查），走完「上传转写稿 → AI 生成 → 四色确认 → 归档 → 审签 → 审计」全链路。</p>
+      <a class="btn primary big" href="#/login">登录开始体验 →</a>
+    </section>
+  </div>`;
 }
 
 /* ---------------- Step2 多智能体生成 ---------------- */
